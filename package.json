@@ -1,0 +1,57 @@
+{
+  "name": "cadence",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cadence — a full-stack online learning platform (React + Express + Prisma/Postgres)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w client",
+    "start": "npm run start -w server",
+    "test": "npm run test -w server && npm run test -w client",
+    "test:server": "npm run test -w server",
+    "test:client": "npm run test -w client",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w client",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,css,json,md}\"",
+    "db:migrate": "npm run db:migrate -w server",
+    "db:deploy": "npm run db:deploy -w server",
+    "db:seed": "npm run db:seed -w server",
+    "db:reset": "npm run db:reset -w server",
+    "db:studio": "npm run db:studio -w server",
+    "docker:up": "docker compose up --build -d",
+    "docker:dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
+    "docker:down": "docker compose down",
+    "docker:reset": "docker compose down -v && docker compose up --build",
+    "docker:logs": "docker compose logs -f",
+    "docker:seed": "docker compose run --rm migrate npm run db:seed -w server",
+    "docker:test": "node scripts/docker-test.mjs",
+    "docker:migrate:dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml exec server npm run db:migrate -w server",
+    "vendor:fonts": "node scripts/vendor-fonts.mjs",
+    "thumbnails": "node scripts/make-thumbnails.mjs",
+    "postinstall": "node scripts/vendor-fonts.mjs || true"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.14.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.14.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.14",
+    "globals": "^15.12.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.13.0"
+  }
+}

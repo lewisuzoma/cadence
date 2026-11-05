@@ -1,0 +1,72 @@
+/*
+ * Self-hosted fonts.  No request ever goes to a font CDN.
+ *
+ * The three families are the ones named in the design artifacts' own
+ * /BaseFont entries: Bricolage Grotesque (display), Inter (body) and
+ * JetBrains Mono (timecodes).  All three are SIL OFL 1.1.
+ *
+ * The .woff2 files live in ../assets/fonts/<family>/ with their licences and
+ * are copied there from the @fontsource-variable packages by
+ * `npm run vendor:fonts` (scripts/vendor-fonts.mjs).  Vite fingerprints them
+ * into dist/assets, and nginx serves them with a one-year immutable cache.
+ *
+ * Variable fonts are used deliberately: one file covers every weight the
+ * design uses, so the whole type system costs three requests.
+ */
+
+@font-face {
+  font-family: 'Inter Variable';
+  src: url('../assets/fonts/inter/inter-latin-wght-normal.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Bricolage Grotesque Variable';
+  src: url('../assets/fonts/bricolage-grotesque/bricolage-grotesque-latin-wght-normal.woff2')
+    format('woff2');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  src: url('../assets/fonts/jetbrains-mono/jetbrains-mono-latin-wght-normal.woff2')
+    format('woff2');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/*
+ * A metric-adjusted fallback, so text does not jump when the webfont lands.
+ * The adjustments line Arial up with Inter's cap height and advance widths.
+ */
+@font-face {
+  font-family: 'Inter Fallback';
+  src: local('Arial');
+  size-adjust: 107%;
+  ascent-override: 90%;
+  descent-override: 22%;
+  line-gap-override: 0%;
+}
+
+:root {
+  --font-sans: 'Inter Variable', 'Inter Fallback', ui-sans-serif, system-ui,
+    -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-heading: 'Bricolage Grotesque Variable', 'Inter Variable',
+    'Inter Fallback', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular',
+    'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}

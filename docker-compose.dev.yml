@@ -1,0 +1,55 @@
+# Hot-reload override.  Run with:
+#
+#   npm run docker:dev
+#   (docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build)
+#
+#   client → http://localhost:5173  (Vite dev server, HMR)
+#   server → http://localhost:4000  (tsx watch)
+#
+# Source is bind-mounted; every node_modules is an anonymous volume so the
+# container keeps its own Linux-built dependencies instead of inheriting the
+# host's.
+
+services:
+  server:
+    build:
+      target: builder
+    working_dir: /app
+    command: npm run dev -w server
+    environment:
+      NODE_ENV: development
+      # Windows and macOS bind mounts do not deliver inotify events.
+      CHOKIDAR_USEPOLLING: 'true'
+      WATCHPACK_POLLING: 'true'
+    volumes:
+      - ./server:/app/server
+      - ./shared:/app/shared
+      - /app/node_modules
+      - /app/server/node_modules
+      - /app/shared/node_modules
+    # tsx watch restarts on crash, so a failed boot should not kill the stack.
+    restart: unless-stopped
+
+  client:
+    build:
+      target: builder
+      args:
+        # Vite's dev proxy forwards /api to the server container.
+        VITE_API_URL: /api/v1
+    working_dir: /app
+    command: npm run dev -w client -- --host 0.0.0.0 --port 5173
+    environment:
+      NODE_ENV: development
+      CHOKIDAR_USEPOLLING: 'true'
+    ports:
+      - '5173:5173'
+    volumes:
+      - ./client:/app/client
+      - ./shared:/app/shared
+      - /app/node_modules
+      - /app/client/node_modules
+      - /app/shared/node_modules
+    depends_on:
+      server:
+        condition: service_started
+    restart: unless-stopped

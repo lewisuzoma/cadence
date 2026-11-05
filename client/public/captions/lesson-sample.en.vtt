@@ -1,0 +1,19 @@
+WEBVTT
+
+NOTE
+Captions for the seeded sample lessons. Served from the client bundle, so no
+request leaves the origin. Replace per-lesson by setting `captionsUrl`.
+
+00:00:00.000 --> 00:00:04.000
+Welcome back. In this lesson we define one schema per request body.
+
+00:00:04.000 --> 00:00:09.500
+We infer the TypeScript type from that schema, so there is a single
+source of truth for both validation and types.
+
+00:00:09.500 --> 00:00:15.000
+Then we return structured 422 errors the frontend can map straight onto
+form fields.
+
+00:00:15.000 --> 00:00:20.000
+That means a validation rule is written once and enforced everywhere.

@@ -1,0 +1,158 @@
+/*
+ * Design tokens.
+ *
+ * Every value here is quoted from the token sheet on page 2 of
+ * docs/desktop/Cadence-UI-Desktop.pdf — see docs/design-notes.md for the
+ * mapping and for the few deliberate contrast adjustments.  The hex value
+ * from the artifact is in a comment beside each HSL triple.
+ */
+
+@import './fonts.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* --- Surfaces ----------------------------------------------------- */
+    --background: 220 16% 96%; /* Canvas    #F5F6F8 · page bg */
+    --foreground: 227 23% 9%; /* Ink       #12141C · text, nav */
+    --card: 0 0% 100%; /* white card surfaces */
+    --card-foreground: 227 23% 9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 227 23% 9%;
+
+    /* --- Text --------------------------------------------------------- */
+    --secondary: 220 16% 96%;
+    --secondary-foreground: 228 14% 33%; /* Slate  #4A5060 · secondary text */
+    --muted: 220 14% 93%;
+    --muted-foreground: 225 11% 42%; /* Muted  #5F6577 · meta */
+
+    /* --- Lines -------------------------------------------------------- */
+    --border: 220 18% 91%; /* Line     #E3E6EC · borders */
+    --input: 220 18% 91%;
+
+    /* --- Brand -------------------------------------------------------- */
+    --primary: 230 100% 59%; /* Cobalt      #2F4BFF · primary action */
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 230 74% 45%; /* Cobalt deep #1E33C7 · links, hover */
+    --primary-tint: 229 100% 96%; /* Cobalt tint #EAEEFF · selected bg */
+    --accent: 229 100% 96%;
+    --accent-foreground: 230 74% 45%;
+    /* "Focus: 3px #2F4BFF ring at 2px offset on every control." */
+    --ring: 230 100% 59%;
+
+    /* --- Status ------------------------------------------------------- */
+    --warning: 30 100% 36%; /* Amber  #B85C00 · in progress */
+    --warning-foreground: 0 0% 100%;
+    --warning-tint: 33 100% 95%;
+    --success: 162 82% 30%; /* Green  #0E8A5C · completed */
+    --success-foreground: 0 0% 100%;
+    --success-tint: 162 60% 95%;
+    --destructive: 4 76% 44%; /* Red    #C2261B · errors, delete */
+    --destructive-foreground: 0 0% 100%;
+    --destructive-tint: 4 80% 96%;
+    --info: 230 100% 59%;
+    --info-foreground: 0 0% 100%;
+
+    /* --- Video surface (the one dark area) ---------------------------- */
+    --night: 230 23% 6%; /* Night  #0C0E16 · video surface */
+    --night-foreground: 0 0% 100%;
+    --night-muted: 225 14% 70%;
+
+    --shadow-color: 227 23% 9%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    /* The design's grid rhythm assumes a 16px root. */
+    font-size: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    font-variation-settings: normal;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-heading;
+  }
+
+  /*
+   * A single visible focus treatment for every control, matching the
+   * artifact: a 3px cobalt ring at 2px offset.  `:focus-visible` keeps it off
+   * mouse clicks but always on for keyboard users.
+   */
+  :focus-visible {
+    outline: 3px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: var(--radius);
+  }
+
+  /* Respect the user's motion preference (stated on artifact page 10). */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* Numeric columns and timecodes line up. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* The skip link: present for keyboard users, out of the way otherwise. */
+  .skip-link {
+    @apply sr-only;
+  }
+  .skip-link:focus {
+    @apply not-sr-only fixed left-4 top-4 z-50 rounded-md bg-primary px-4 py-2 text-primary-foreground shadow-overlay;
+  }
+
+  /*
+   * Skeletons "match the final card geometry so nothing jumps. Shimmer is
+   * disabled under reduced motion." — artifact page 10.
+   */
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-muted;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full;
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      hsl(0 0% 100% / 0.6),
+      transparent
+    );
+    animation: shimmer 1.6s infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton::after {
+      animation: none;
+      display: none;
+    }
+  }
+
+  /* Minimum 44px touch target, from the artifact's accessibility note. */
+  .touch-target {
+    @apply min-h-11 min-w-11;
+  }
+}

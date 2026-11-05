@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.npm-install*.log
+npm-debug.log*
+.DS_Store
+.vscode/
+.idea/
+test-results/
+playwright-report/
