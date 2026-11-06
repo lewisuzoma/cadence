@@ -144,10 +144,22 @@ export default {
         shimmer: {
           '100%': { transform: 'translateX(100%)' },
         },
+        /*
+         * A nudge-then-rest beat, for an attention cue that loops forever:
+         * the hold from 55% on keeps it from reading as a jitter.  Both ends
+         * sit at 0 so the reduced-motion rule in globals.css, which collapses
+         * every animation to a single 0.01ms run, leaves the element at rest
+         * rather than frozen mid-slide.
+         */
+        'nudge-x': {
+          '0%, 55%, 100%': { transform: 'translateX(0)' },
+          '27%': { transform: 'translateX(0.3rem)' },
+        },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
+        'nudge-x': 'nudge-x 1.6s ease-in-out infinite',
       },
     },
   },

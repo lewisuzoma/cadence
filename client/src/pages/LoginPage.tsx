@@ -197,7 +197,16 @@ export function LoginPage() {
 
       {/* Prototype shortcuts */}
       <div className="mt-6 border-t border-border pt-5">
-        <p className="mb-3 text-overline uppercase text-muted-foreground">Prototype shortcuts</p>
+        <p className="mb-3 flex items-center gap-2 text-overline uppercase text-muted-foreground">
+          {/*
+            A prototype-only attention cue: reviewers were reading this block
+            as footer matter and missing the way in.  Decorative, so it is
+            hidden from assistive technology — the label already says what
+            follows.
+          */}
+          <ArrowRight aria-hidden="true" className="size-4 shrink-0 animate-nudge-x text-primary" />
+          Prototype shortcuts
+        </p>
         <div className="flex flex-wrap gap-2">
           {DEMO_ACCOUNTS.map((account) => (
             <Button
