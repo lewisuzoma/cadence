@@ -64,6 +64,18 @@ describe('loginSchema', () => {
   it('rejects an invalid email', () => {
     expect(loginSchema.safeParse({ email: 'nope', password: 'x' }).success).toBe(false);
   });
+
+  it('rejects a password past the 72-byte bcrypt truncation point', () => {
+    // Without the cap the extra characters are silently dropped by bcrypt,
+    // so two different passwords would both open the same account.
+    const result = loginSchema.safeParse({ email: 'a@b.dev', password: 'x'.repeat(73) });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a password of exactly 72 characters', () => {
+    const result = loginSchema.safeParse({ email: 'a@b.dev', password: 'x'.repeat(72) });
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('courseQuerySchema', () => {

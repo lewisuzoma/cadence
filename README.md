@@ -53,7 +53,7 @@ All four use the password `Password123`.
 | API (direct) | <http://localhost:4000/api/v1> |
 | API docs (Swagger UI) | <http://localhost:4000/api/docs> |
 | OpenAPI JSON | <http://localhost:4000/api/docs.json> |
-| Postgres | `localhost:5432` (change with `DB_PORT`) |
+| Postgres | `localhost:55432` (change with `DB_PORT`) |
 
 In Compose, nginx serves the built client and proxies `/api` to the server, so
 the browser sees a **single origin**. That keeps the auth cookies first-party
@@ -83,8 +83,10 @@ Workspace scripts, which also work on the non-Docker path:
 | `npm run lint` | ESLint, zero warnings tolerated |
 | `npm run build` | Build shared, server, then client |
 | `npm run db:migrate` / `db:deploy` / `db:seed` / `db:reset` | Prisma, against `DATABASE_URL` |
+| `npm run env:check` | Report any key `.env` is missing relative to `.env.example` |
 | `npm run vendor:fonts` | Copy the self-hosted `.woff2` files out of `@fontsource` |
 | `npm run thumbnails` | Regenerate the SVG course thumbnails |
+| `npm run lesson:video` | Regenerate the bundled sample lesson video and its captions (needs Chrome or Edge) |
 
 ---
 
@@ -144,30 +146,43 @@ You still need a PostgreSQL 16 instance; the quickest is to borrow Compose's:
 
 ```bash
 npm install
-docker compose up -d db          # or point DATABASE_URL at your own Postgres
-
 cp .env.example .env
-# Outside Compose the host is localhost, not `db`:
-#   DATABASE_URL=postgresql://cadence:cadence_dev_password@localhost:5432/cadence?schema=public
+docker compose up -d db          # or point DATABASE_URL at your own Postgres
 
 npm run db:migrate
 npm run db:seed
 npm run dev                      # API on :4000, client on :5173
 ```
 
+No hand-editing of `.env` is needed: the template holds the **host** values
+(`localhost:55432`, `NODE_ENV=development`). Compose overrides `DATABASE_URL`,
+`DATABASE_URL_TEST`, `NODE_ENV` and `APP_URL` for its own services, so one file
+serves both paths.
+
+These commands load `.env` through `dotenv-cli`, which is why they work from a
+plain shell. If you invoke the workspace scripts directly (`npm run dev -w
+server`) you are bypassing that and must supply the environment yourself —
+that is the form Compose uses, where the environment already exists.
+
+`npm run env:check` reports any key your `.env` is missing. `.env` is
+gitignored, so it does not pick up keys added to `.env.example` later; this is
+the check that tells you.
+
 On this path the client is served by Vite on `:5173` and proxies `/api` to the
 API, so the browser still sees one origin. `CORS_ORIGIN` covers the case where
 you serve them from genuinely different origins.
 
-To run the server tests outside Docker, point `DATABASE_URL_TEST` at a
-database whose name contains `test` (the suite refuses anything else, because
-it resets the database it is given):
+To run the server tests outside Docker, create the test database once. Prisma
+creates the *schema*, not the database, so it has to exist first:
 
 ```bash
 docker compose exec db psql -U cadence -d cadence -c "CREATE DATABASE cadence_test"
-DATABASE_URL_TEST="postgresql://cadence:cadence_dev_password@localhost:5432/cadence_test?schema=public" \
-  npm run test:server
+npm run test:server
 ```
+
+`DATABASE_URL_TEST` already points there in `.env`, so nothing needs passing on
+the command line. The suite refuses any URL whose database name does not
+contain `test`, because it resets whatever it is given.
 
 ---
 
@@ -182,22 +197,24 @@ secrets.
 | `POSTGRES_USER` | yes | `cadence` | Compose passes it to the `db` service |
 | `POSTGRES_PASSWORD` | yes | `cadence_dev_password` | Change outside local use |
 | `POSTGRES_DB` | yes | `cadence` | |
-| `DATABASE_URL` | yes | `…@db:5432/cadence` | **Compose overrides this** with the `db` service name; set it yourself only on the non-Docker path |
-| `DATABASE_URL_TEST` | tests only | `…@db-test:5432/cadence_test` | Must contain `test`; the suite resets it |
+| `DATABASE_URL` | yes | `…@localhost:55432/cadence` | The host value. **Compose overrides it** with the `db` service name |
+| `DATABASE_URL_TEST` | tests only | `…@localhost:55432/cadence_test` | Must contain `test`; the suite resets it. **Compose overrides it** with `db-test` |
 | `JWT_ACCESS_SECRET` | yes | dev placeholder | ≥ 32 chars. `openssl rand -base64 48` |
 | `JWT_REFRESH_SECRET` | yes | dev placeholder | ≥ 32 chars, and must differ from the access secret in production |
 | `ACCESS_TOKEN_TTL` | no | `15m` | |
 | `REFRESH_TOKEN_TTL` | no | `7d` | Also the refresh cookie's `maxAge` |
 | `REFRESH_TOKEN_TTL_REMEMBERED` | no | `30d` | Used when "keep me signed in" is ticked at sign-in |
 | `BCRYPT_COST` | no | `12` | The test profile lowers it to 4 for speed |
-| `NODE_ENV` | no | `production` | `development` enables pretty logs |
+| `NODE_ENV` | no | `development` | The host value. **Compose overrides it** with `production` |
 | `PORT` | no | `4000` | API port inside the container |
 | `CORS_ORIGIN` | no | `http://localhost:5173` | Comma-separated allow-list; unused in Compose |
 | `COOKIE_SECURE` | no | `false` | `true` only behind HTTPS |
+| `APP_URL` | no | `http://localhost:8080` | Public URL of the SPA; password-reset links are built from this, never from the request `Host` |
+| `MAIL_FROM` | no | `Cadence <no-reply@cadence.dev>` | `From:` on transactional mail |
 | `LOG_LEVEL` | no | `info` | `silent` in tests |
 | `CLIENT_PORT` | no | `8080` | Published host port for nginx |
 | `API_PORT` | no | `4000` | Published host port for the API |
-| `DB_PORT` | no | `5432` | Published host port for Postgres |
+| `DB_PORT` | no | `55432` | Published host port for Postgres. Not 5432: a locally installed Postgres usually owns that, and the clash is silent |
 | `VITE_API_URL` | no | `/api/v1` | Baked in at client build time |
 
 The server validates all of this with Zod at boot and **exits** on anything
@@ -219,7 +236,7 @@ Every response uses one envelope:
 
 | Area | Endpoints |
 |---|---|
-| Auth | `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `POST /auth/change-password`, `GET|PATCH /auth/me` |
+| Auth | `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `POST /auth/forgot-password`, `POST /auth/reset-password`, `POST /auth/change-password`, `GET|PATCH /auth/me` |
 | Catalog | `GET /courses`, `/courses/categories`, `/courses/:idOrSlug`, `/courses/:courseId/lessons`, `/lessons/:id` |
 | Enrollment | `POST|DELETE /courses/:courseId/enroll`, `GET /courses/:courseId/enrollment`, `GET /enrollments/me` |
 | Progress | `GET|PUT /lessons/:lessonId/progress`, `POST /lessons/:lessonId/complete`, `GET /progress/me` |
@@ -236,15 +253,25 @@ that value in an `X-CSRF-Token` header.
 
 ## Troubleshooting
 
-**Port already in use.** The most common clash is `5432`, if a PostgreSQL is
-already installed on the host — Compose will start, but `localhost:5432` will
-reach the wrong server. Change the published port and leave the container's
-internal port alone:
+**Port already in use.** Postgres is published on `55432` rather than `5432`
+precisely because a locally installed PostgreSQL usually owns `5432`, and that
+clash is silent: Compose starts fine, but `localhost:5432` then reaches the
+*other* server and authentication fails with no hint as to why. If one of the
+published ports is still taken, change it and leave the container's internal
+port alone:
 
 ```bash
 # in .env
-DB_PORT=55432
+DB_PORT=55433      # keep DATABASE_URL / DATABASE_URL_TEST in step
 CLIENT_PORT=8081   # if 8080 is taken
+```
+
+**`npm run dev` or `npm run db:migrate` complains about the environment.**
+`.env` is gitignored, so it does not gain keys that were added to
+`.env.example` after you copied it:
+
+```bash
+npm run env:check   # lists exactly what is missing
 ```
 
 **The app loads but every request 500s.** Check the server reached the
@@ -316,7 +343,11 @@ auth design, the progress-tracking approach and the trade-offs taken.
   signed, expiring URLs behind a CDN.
 - **No file uploads.** Thumbnails and videos are URLs or app-served paths;
   there is no storage layer.
-- **No email.** So no password reset and no email verification.
+- **No mail transport.** Password reset is implemented end to end — token,
+  expiry, single use, session revocation — but nothing delivers the message
+  yet: `server/src/lib/mailer.ts` logs it instead, so the link is followable
+  from `docker compose logs server`. Mailtrap SMTP plugs into that one file.
+  Email verification is still not implemented.
 - **Catalog sorting by duration is sorted per page**, because duration is
   derived from lessons rather than stored. Correct global ordering needs a
   window function or a maintained column.

@@ -29,6 +29,28 @@ describe('password hashing', () => {
     const b = await hashPassword('Password123');
     expect(a).not.toBe(b);
   });
+
+  /*
+   * These two pin down the constraint that silently disabled the login timing
+   * defence.  `authService.login` compares against a dummy hash when the email
+   * is unknown, so an unknown address costs the same time as a wrong password
+   * and the two cannot be told apart.  That dummy used to be a hand-written
+   * 66-character literal, and bcryptjs returns false immediately for any hash
+   * that is not exactly 60 characters -- so no hashing happened and the
+   * timings diverged anyway.
+   */
+  it('produces a hash of exactly 60 characters', async () => {
+    expect(await hashPassword('Password123')).toHaveLength(60);
+  });
+
+  it('returns false, without hashing, for a hash of the wrong length', async () => {
+    // Assembled by concatenation to keep the shape obvious: this is exactly
+    // the 66-character constant that used to be passed in.
+    const malformed = ['$2a', '12', 'invalid'.repeat(8) + 'inv'].join('$');
+    expect(malformed).toHaveLength(66);
+    // No throw, just an instant false -- which is why the bug was invisible.
+    expect(await verifyPassword('Password123', malformed)).toBe(false);
+  });
 });
 
 describe('tokens', () => {

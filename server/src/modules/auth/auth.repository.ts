@@ -50,6 +50,66 @@ export const authRepository = {
     return prisma.user.update({ where: { id }, data: { passwordHash }, select: { id: true } });
   },
 
+  // --- password reset ----------------------------------------------------
+
+  createPasswordResetToken(data: { userId: string; tokenHash: string; expiresAt: Date }) {
+    return prisma.passwordResetToken.create({ data });
+  },
+
+  /** The user comes with the token: the service needs both and this is one trip. */
+  findPasswordResetToken(tokenHash: string) {
+    return prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+  },
+
+  /**
+   * Spends the token and sets the new password in one transaction, so a
+   * failure cannot leave a used token beside an unchanged password (or the
+   * reverse: a changed password with a link still live).
+   *
+   * `updateMany` with `usedAt: null` in the filter is what makes redemption
+   * atomic: two concurrent requests race on the same row and exactly one sees
+   * a count of 1. The caller treats 0 as "already used".
+   */
+  async redeemPasswordReset(params: {
+    tokenId: string;
+    userId: string;
+    passwordHash: string;
+  }): Promise<boolean> {
+    return prisma.$transaction(async (tx) => {
+      const spent = await tx.passwordResetToken.updateMany({
+        where: { id: params.tokenId, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      if (spent.count === 0) return false;
+
+      await tx.user.update({
+        where: { id: params.userId },
+        data: { passwordHash: params.passwordHash },
+      });
+      // Every other outstanding link for this user dies with it.
+      await tx.passwordResetToken.updateMany({
+        where: { userId: params.userId, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      await tx.refreshToken.updateMany({
+        where: { userId: params.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return true;
+    });
+  },
+
+  /** Supersedes any link already outstanding when a new one is requested. */
+  invalidatePasswordResets(userId: string) {
+    return prisma.passwordResetToken.updateMany({
+      where: { userId, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+  },
+
   // --- refresh tokens ----------------------------------------------------
 
   createRefreshToken(data: {

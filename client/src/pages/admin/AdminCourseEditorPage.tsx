@@ -16,6 +16,7 @@ import {
   formatDuration,
   formatTimecode,
   lessonInputSchema,
+  SAMPLE_LESSON_VIDEO,
   type LessonInput,
   type LessonSummary,
   type ModuleWithLessons,
@@ -444,8 +445,10 @@ function LessonForm({
     defaultValues: {
       title: '',
       description: '',
-      videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-      durationSeconds: 600,
+      // The bundled sample, so a lesson created here plays straight away;
+      // replace it with the real media URL.
+      videoUrl: SAMPLE_LESSON_VIDEO.url,
+      durationSeconds: SAMPLE_LESSON_VIDEO.durationSeconds,
       isPreview: false,
     },
   });

@@ -29,6 +29,16 @@ const envSchema = z
 
     /** Comma-separated allow-list, used only on the non-Docker dev path. */
     CORS_ORIGIN: z.string().default('http://localhost:5173'),
+
+    /**
+     * Where the SPA is reachable.  Password-reset links are built from this,
+     * and from nothing in the request: deriving the host from an inbound
+     * `Host` header would let an attacker who can set it have the link point
+     * at their own server.
+     */
+    APP_URL: z.string().url('APP_URL must be an absolute URL').default('http://localhost:8080'),
+    /** The From: on transactional mail. */
+    MAIL_FROM: z.string().min(1).default('Cadence <no-reply@cadence.dev>'),
     COOKIE_SECURE: z
       .enum(['true', 'false'])
       .default('false')

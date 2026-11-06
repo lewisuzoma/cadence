@@ -13,3 +13,7 @@ npm-debug.log*
 .idea/
 test-results/
 playwright-report/
+.claude/
+docs/
+PLAN.md
+docs/design-notes.md

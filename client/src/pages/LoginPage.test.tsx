@@ -47,6 +47,83 @@ describe('LoginPage', () => {
     expect(alert).toHaveTextContent('Invalid email or password');
   });
 
+  it('appends the correlation id to a server error so it can be reported', async () => {
+    /*
+     * A 500 tells the browser nothing about what broke, by design.  The id is
+     * what turns "login is broken" into something traceable to a log line --
+     * the thing that was missing when a CORS misconfiguration 500'd every
+     * sign-in and left no way to tie the two together.
+     */
+    server.use(
+      http.post('/api/v1/auth/login', () =>
+        HttpResponse.json(
+          {
+            success: false,
+            message: 'Something went wrong',
+            code: 'INTERNAL_ERROR',
+            requestId: 'req-abc-123',
+          },
+          { status: 500, headers: { 'X-Request-Id': 'req-abc-123' } },
+        ),
+      ),
+    );
+
+    renderWithRouter(<LoginPage />, { path: '/login' });
+
+    await userEvent.type(screen.getByLabelText('Email'), 'ada@cadence.dev');
+    await userEvent.type(screen.getByLabelText('Password'), 'Password123');
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Something went wrong (ref: req-abc-123)');
+  });
+
+  it('reads the id from the header when a proxy answers with no envelope', async () => {
+    // What a crashed upstream or a misrouted dev proxy actually returns: there
+    // is no JSON body to carry `requestId`, so the header has to serve.
+    server.use(
+      http.post(
+        '/api/v1/auth/login',
+        () =>
+          new HttpResponse('<html><body>502 Bad Gateway</body></html>', {
+            status: 502,
+            headers: { 'Content-Type': 'text/html', 'X-Request-Id': 'req-xyz-789' },
+          }),
+      ),
+    );
+
+    renderWithRouter(<LoginPage />, { path: '/login' });
+
+    await userEvent.type(screen.getByLabelText('Email'), 'ada@cadence.dev');
+    await userEvent.type(screen.getByLabelText('Password'), 'Password123');
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('The server sent an unreadable response (ref: req-xyz-789)');
+  });
+
+  it('leaves a 401 message free of a correlation id', async () => {
+    // User-facing copy stays clean; 4xx is the client's to fix, not ours.
+    server.use(
+      http.post('/api/v1/auth/login', () =>
+        HttpResponse.json(
+          { success: false, message: 'Invalid email or password', code: 'INVALID_CREDENTIALS' },
+          { status: 401, headers: { 'X-Request-Id': 'req-should-not-show' } },
+        ),
+      ),
+    );
+
+    renderWithRouter(<LoginPage />, { path: '/login' });
+
+    await userEvent.type(screen.getByLabelText('Email'), 'ada@cadence.dev');
+    await userEvent.type(screen.getByLabelText('Password'), 'Password123');
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Invalid email or password');
+    expect(alert).not.toHaveTextContent('req-should-not-show');
+  });
+
   it('maps a server field error onto the matching input', async () => {
     server.use(
       http.post('/api/v1/auth/login', () =>

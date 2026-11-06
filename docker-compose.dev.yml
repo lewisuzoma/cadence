@@ -18,6 +18,9 @@ services:
     command: npm run dev -w server
     environment:
       NODE_ENV: development
+      # The SPA is the Vite dev server here, not nginx on :8080, so emailed
+      # password-reset links have to point at :5173 to be followable.
+      APP_URL: http://localhost:5173
       # Windows and macOS bind mounts do not deliver inotify events.
       CHOKIDAR_USEPOLLING: 'true'
       WATCHPACK_POLLING: 'true'
@@ -40,6 +43,10 @@ services:
     command: npm run dev -w client -- --host 0.0.0.0 --port 5173
     environment:
       NODE_ENV: development
+      # Vite's dev proxy target. Without this, vite.config.ts falls back to
+      # http://localhost:4000, which inside this container is nothing at all,
+      # so every /api call fails at the proxy.
+      VITE_PROXY_TARGET: http://server:4000
       CHOKIDAR_USEPOLLING: 'true'
     ports:
       - '5173:5173'

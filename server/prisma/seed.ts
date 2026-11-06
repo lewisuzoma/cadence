@@ -10,6 +10,7 @@
  * Course titles, categories and lesson names mirror the design artifacts, so
  * a reviewer opening the app sees the screens the PDFs describe.
  */
+import { SAMPLE_LESSON_VIDEO } from '@cadence/shared';
 import { PrismaClient, type Difficulty, type CourseStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
@@ -42,28 +43,21 @@ type CourseSeed = {
 };
 
 /**
- * Blender's open movies, hosted by Google's public sample bucket. They are
- * Creative Commons licensed and are the standard stand-in for real lesson
- * video. `videoUrl` is a plain column, so any deployment can point lessons at
- * its own CDN without a code change.
+ * The bundled sample lesson, served by the client from `client/public/media`.
+ *
+ * This used to point at Blender's open movies on Google's public sample
+ * bucket; that bucket now answers 403, which left every seeded lesson with a
+ * dead `videoUrl`. The sample ships with the repository instead, so it cannot
+ * rot, needs no CDN and satisfies the client's own `media-src 'self'` CSP.
+ * Rebuild it with `npm run lesson:video` (scripts/make-lesson-video.mjs).
+ *
+ * One file serves every lesson, so every lesson is seeded with the sample's
+ * own length rather than the per-lesson figure below: the curriculum, the
+ * player's timecode and the completion rules then all agree about how long a
+ * lesson is. `videoUrl` and `durationSeconds` are plain columns — point a
+ * deployment at its own media and the authored durations apply again.
  */
-const VIDEOS = [
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/VolkswagenGTIReview.mp4',
-] as const;
-
-const videoFor = (index: number): string => VIDEOS[index % VIDEOS.length]!;
-
-/** Served by the client from `client/public/captions`, not a third party. */
-const CAPTIONS_URL = '/captions/lesson-sample.en.vtt';
+const SAMPLE_VIDEO = SAMPLE_LESSON_VIDEO;
 
 const COURSES: CourseSeed[] = [
   {
@@ -532,7 +526,6 @@ async function seedUsers() {
 }
 
 async function seedCourses(adminId: string) {
-  let videoIndex = 0;
   const created: { id: string; slug: string; lessonIds: string[] }[] = [];
 
   for (const seed of COURSES) {
@@ -570,16 +563,15 @@ async function seedCourses(adminId: string) {
 
       for (const [lessonIndex, lessonSeed] of moduleSeed.lessons.entries()) {
         const lessonOrder = lessonIndex + 1;
-        const video = videoFor(videoIndex++);
         const lesson = await prisma.lesson.upsert({
           where: { moduleId_order: { moduleId: module.id, order: lessonOrder } },
           update: {
             title: lessonSeed.title,
             description: lessonSeed.description,
-            durationSeconds: lessonSeed.durationSeconds,
+            durationSeconds: SAMPLE_VIDEO.durationSeconds,
             isPreview: lessonSeed.isPreview ?? false,
-            videoUrl: video,
-            captionsUrl: lessonSeed.captions ? CAPTIONS_URL : null,
+            videoUrl: SAMPLE_VIDEO.url,
+            captionsUrl: lessonSeed.captions ? SAMPLE_VIDEO.captionsUrl : null,
             courseId: course.id,
           },
           create: {
@@ -587,10 +579,10 @@ async function seedCourses(adminId: string) {
             courseId: course.id,
             title: lessonSeed.title,
             description: lessonSeed.description,
-            durationSeconds: lessonSeed.durationSeconds,
+            durationSeconds: SAMPLE_VIDEO.durationSeconds,
             isPreview: lessonSeed.isPreview ?? false,
-            videoUrl: video,
-            captionsUrl: lessonSeed.captions ? CAPTIONS_URL : null,
+            videoUrl: SAMPLE_VIDEO.url,
+            captionsUrl: lessonSeed.captions ? SAMPLE_VIDEO.captionsUrl : null,
             order: lessonOrder,
           },
         });

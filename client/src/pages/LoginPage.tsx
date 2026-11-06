@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { ArrowRight, Check, Eye, EyeOff } from 'lucide-react';
 import { loginSchema, type LoginInput } from '@cadence/shared';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -44,8 +44,18 @@ const DEMO_PASSWORD = 'Password123';
 
 export function LoginPage() {
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const login = useLogin();
+  /*
+   * A one-off message handed over by another screen — today, the reset flow
+   * saying the password was changed. It is read once into state so that it
+   * survives re-renders but does not come back if the user navigates away
+   * and returns.
+   */
+  const [notice] = useState<string | null>(
+    (location.state as { notice?: string } | null)?.notice ?? null,
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -76,6 +86,16 @@ export function LoginPage() {
         <h2 className="font-heading text-heading">Welcome back</h2>
         <p className="text-small text-secondary-foreground">Sign in to continue learning.</p>
       </div>
+
+      {notice ? (
+        <div
+          role="status"
+          className="mb-5 flex items-start gap-3 rounded-md bg-success-tint px-3.5 py-3 text-small text-foreground"
+        >
+          <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+          <p>{notice}</p>
+        </div>
+      ) : null}
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-5" noValidate>

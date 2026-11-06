@@ -33,11 +33,30 @@ export function errorHandler(
 ): void {
   if (res.headersSent) return next(error);
 
+  /*
+   * Carried into every 5xx body and every error log line for this request.
+   * A 5xx body is deliberately vague about what broke, so without a shared
+   * reference a user's report cannot be matched to the trace that explains it.
+   * 4xx responses keep their user-facing copy unchanged -- the id is still on
+   * the X-Request-Id header for those.
+   */
+  const ref = req.requestId;
+
   if (isAppError(error)) {
     if (!error.expected) {
-      logger.error({ err: error, path: req.originalUrl }, 'Unexpected application error');
+      logger.error(
+        { err: error, path: req.originalUrl, requestId: ref },
+        'Unexpected application error',
+      );
     }
-    fail(res, error.status, error.code, error.message, error.fieldErrors);
+    fail(
+      res,
+      error.status,
+      error.code,
+      error.message,
+      error.fieldErrors,
+      error.status >= 500 ? ref : undefined,
+    );
     return;
   }
 
@@ -46,7 +65,48 @@ export function errorHandler(
     return;
   }
 
+  /*
+   * The database is unreachable, or the query engine died.  Neither is a bug in
+   * this code and neither is a 500: `server.ts` only proves the connection at
+   * boot, so a database that goes away later surfaces here.  503 matches what
+   * /api/v1/health already reports for the same condition, and tells the client
+   * the request is worth retrying -- ApiError.isClientError treats it as such.
+   */
+  if (
+    error instanceof Prisma.PrismaClientInitializationError ||
+    error instanceof Prisma.PrismaClientRustPanicError
+  ) {
+    logger.error({ err: error, path: req.originalUrl, requestId: ref }, 'Database unavailable');
+    fail(res, 503, 'SERVICE_UNAVAILABLE', 'The service is temporarily unavailable', undefined, ref);
+    return;
+  }
+
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    /*
+     * Every P1xxx code is about the connection rather than the query: P1001
+     * cannot reach the server, P1002 timed out, P1017 the server closed the
+     * connection, P1000/P1010 credentials rejected.  None of them is a bug in
+     * the request, so none is a 500 -- the API is up and the database is not.
+     *
+     * `PrismaClientInitializationError` below covers the same condition when
+     * it is hit on the very first connection; this covers a pool that worked
+     * and then stopped, which is what a database restart looks like.
+     */
+    if (error.code.startsWith('P1')) {
+      logger.error(
+        { err: error, code: error.code, path: req.originalUrl, requestId: ref },
+        'Database unavailable',
+      );
+      fail(
+        res,
+        503,
+        'SERVICE_UNAVAILABLE',
+        'The service is temporarily unavailable',
+        undefined,
+        ref,
+      );
+      return;
+    }
     // P2002 unique violation, P2025 record not found, P2003 FK violation.
     if (error.code === 'P2002') {
       const target = (error.meta?.target as string[] | undefined)?.join(', ') ?? 'value';
@@ -61,8 +121,19 @@ export function errorHandler(
       fail(res, 409, 'CONFLICT', 'That record is still referenced by other data');
       return;
     }
-    logger.error({ err: error, code: error.code }, 'Unhandled Prisma error');
-    fail(res, 500, 'INTERNAL_ERROR', 'Something went wrong');
+    if (error.code === 'P2021' || error.code === 'P2022') {
+      // A table or column the code expects is absent.  Nearly always a
+      // database the migrations were never applied to, so say so in the log
+      // instead of leaving it in the catch-all with everything else.
+      logger.error(
+        { err: error, code: error.code, meta: error.meta, path: req.originalUrl, requestId: ref },
+        'Schema mismatch - migrations may not be applied to this database',
+      );
+      fail(res, 500, 'INTERNAL_ERROR', 'Something went wrong', undefined, ref);
+      return;
+    }
+    logger.error({ err: error, code: error.code, requestId: ref }, 'Unhandled Prisma error');
+    fail(res, 500, 'INTERNAL_ERROR', 'Something went wrong', undefined, ref);
     return;
   }
 
@@ -72,12 +143,14 @@ export function errorHandler(
   }
 
   // Anything unrecognised is a bug: log it in full, tell the client nothing.
-  logger.error({ err: error, path: req.originalUrl }, 'Unhandled error');
+  logger.error({ err: error, path: req.originalUrl, requestId: ref }, 'Unhandled error');
   fail(
     res,
     500,
     'INTERNAL_ERROR',
     isProduction ? 'Something went wrong' : String((error as Error)?.message ?? error),
+    undefined,
+    ref,
   );
 }
 

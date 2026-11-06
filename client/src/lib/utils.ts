@@ -1,5 +1,59 @@
 import { type ClassValue, clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { extendTailwindMerge } from 'tailwind-merge';
+
+/**
+ * tailwind-merge has to be told about this project's type scale.
+ *
+ * Out of the box it recognises Tailwind's stock font sizes (`text-sm`,
+ * `text-lg`, …) and classifies every *other* `text-*` as a colour. Our scale
+ * is named after the artifact (`text-small`, `text-caption`, `text-body`, …),
+ * so it fell into the colour group — which put font sizes and real colours in
+ * one bucket where only the last class survives.
+ *
+ * That silently broke every Button: `buttonVariants` emits a size from the
+ * base (`text-small`), a colour from the variant (`text-background`) and
+ * another size from the size (`text-caption`), and the merge kept exactly one
+ * of the three. The visible symptom was the catalog's selected category chip
+ * rendering as Ink-on-Ink — it lost `text-background` and inherited the body
+ * colour — but `destructive`/`success` buttons at `sm`/`lg` were losing their
+ * foreground colour the same way, and `default`-size buttons were losing
+ * their font size and rendering at the inherited 16px.
+ *
+ * Listing the scale here is what keeps sizes and colours in separate groups,
+ * so one of each survives. Any new entry in `tailwind.config.ts`'s `fontSize`
+ * or `boxShadow` must be added here too.
+ */
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      'font-size': [
+        {
+          text: [
+            'display',
+            'display-sm',
+            'heading',
+            'heading-sm',
+            'title',
+            'body',
+            'small',
+            'caption',
+            'overline',
+            'timecode',
+          ],
+        },
+      ],
+      // Same trap, smaller blast radius: custom shadow names would otherwise
+      // be read as shadow *colours* rather than as shadows.
+      shadow: [{ shadow: ['hover', 'card', 'overlay'] }],
+      /*
+       * `rounded-pill` is ours too, so `rounded-md rounded-pill` was leaving
+       * both classes in place and letting CSS source order pick the winner.
+       * It happened to pick the pill, but nothing was enforcing that.
+       */
+      rounded: [{ rounded: ['pill'] }],
+    },
+  },
+});
 
 /** The shadcn class helper: conditional classes, with Tailwind conflicts resolved. */
 export function cn(...inputs: ClassValue[]): string {

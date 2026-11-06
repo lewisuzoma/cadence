@@ -46,7 +46,11 @@ export type RegisterInput = z.infer<typeof registerSchema>;
 
 export const loginSchema = z.object({
   email: emailSchema,
-  password: z.string().min(1, 'Password is required'),
+  // Not `passwordSchema`: the composition rules must not be re-applied at
+  // sign-in, or tightening them later would lock out existing accounts.  The
+  // 72-character ceiling does apply, though -- it is bcrypt's truncation point,
+  // so without it an over-long password is silently cut rather than refused.
+  password: z.string().min(1, 'Password is required').max(72, 'Use at most 72 characters'),
   /**
    * "Keep me signed in for 30 days", from the sign-in screen.
    *
@@ -57,6 +61,33 @@ export const loginSchema = z.object({
   rememberMe: z.boolean().default(false),
 });
 export type LoginInput = z.infer<typeof loginSchema>;
+
+/**
+ * "Forgot password?" — step one.  Only an email: the response is deliberately
+ * identical whether or not the address is registered, so this endpoint cannot
+ * be used to enumerate accounts.
+ */
+export const forgotPasswordSchema = z.object({
+  email: emailSchema,
+});
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+
+/**
+ * Step two: the token from the emailed link, plus the new password.  The
+ * token is the opaque value the server mailed out — only its hash is stored,
+ * so a database leak hands out no usable reset links.
+ */
+export const resetPasswordSchema = z
+  .object({
+    token: z.string().trim().min(1, 'This reset link is incomplete'),
+    password: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  });
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 
 export const changePasswordSchema = z
   .object({

@@ -51,6 +51,12 @@ export type ApiFailure = {
   message: string;
   code: ErrorCode;
   errors?: Record<string, string[]>;
+  /**
+   * Correlation id, present on 5xx only.  A 5xx body is deliberately vague
+   * about what broke, so this is what lets a user's report be matched to the
+   * server log line that holds the stack trace.
+   */
+  requestId?: string;
 };
 
 export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
@@ -67,6 +73,8 @@ export const ERROR_CODES = [
   'UNPROCESSABLE',
   'RATE_LIMITED',
   'INTERNAL_ERROR',
+  /** 503: the API is up but a dependency it needs is not.  Worth retrying. */
+  'SERVICE_UNAVAILABLE',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 

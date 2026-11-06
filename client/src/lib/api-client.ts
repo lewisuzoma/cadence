@@ -20,18 +20,22 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: ErrorCode;
   readonly fieldErrors?: Record<string, string[]>;
+  /** Correlation id for a 5xx; see `withRef`. */
+  readonly requestId?: string;
 
   constructor(
     status: number,
     code: ErrorCode,
     message: string,
     fieldErrors?: Record<string, string[]>,
+    requestId?: string,
   ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     if (fieldErrors) this.fieldErrors = fieldErrors;
+    if (requestId) this.requestId = requestId;
   }
 
   /** 4xx other than 408/429: retrying will not change the answer. */
@@ -41,6 +45,18 @@ export class ApiError extends Error {
 }
 
 export type Paginated<T> = { items: T; meta: PaginationMeta };
+
+/**
+ * Appends the correlation id to a 5xx message.
+ *
+ * A 5xx message is deliberately vague -- the server will not tell a browser
+ * what broke -- which leaves a user with nothing to report but "it failed".
+ * The id gives them something quotable that maps to the server log line
+ * holding the stack trace.  4xx copy is user-facing and left untouched.
+ */
+function withRef(message: string, status: number, ref?: string): string {
+  return status >= 500 && ref ? `${message} (ref: ${ref})` : message;
+}
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -115,22 +131,34 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
 async function parse<T>(response: Response): Promise<{ data: T; meta?: PaginationMeta }> {
   if (response.status === 204) return { data: undefined as T };
 
+  // Read from the header too: it is set on every response, so it survives the
+  // non-JSON case below where there is no envelope to read `requestId` from.
+  const headerRef = response.headers.get('X-Request-Id') ?? undefined;
+
   const text = await response.text();
   let payload: unknown;
   try {
     payload = text ? JSON.parse(text) : {};
   } catch {
     // A non-JSON body means something upstream (a proxy, a crash) answered.
-    throw new ApiError(response.status, 'INTERNAL_ERROR', 'The server sent an unreadable response');
+    throw new ApiError(
+      response.status,
+      'INTERNAL_ERROR',
+      withRef('The server sent an unreadable response', response.status, headerRef),
+      undefined,
+      headerRef,
+    );
   }
 
   if (!response.ok) {
     const failure = payload as ApiFailure;
+    const ref = failure?.requestId ?? headerRef;
     throw new ApiError(
       response.status,
       failure?.code ?? 'INTERNAL_ERROR',
-      failure?.message ?? 'Something went wrong',
+      withRef(failure?.message ?? 'Something went wrong', response.status, ref),
       failure?.errors,
+      ref,
     );
   }
 

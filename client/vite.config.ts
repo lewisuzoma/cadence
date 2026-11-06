@@ -4,6 +4,12 @@ import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
   plugins: [react()],
+  /*
+   * The repo keeps one `.env` at the root; there is no `client/.env`. Without
+   * this, Vite would look only in this directory, find nothing, and silently
+   * fall back for every VITE_* value.
+   */
+  envDir: fileURLToPath(new URL('..', import.meta.url)),
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

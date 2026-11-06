@@ -9,8 +9,10 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type {
   ChangePasswordInput,
+  ForgotPasswordInput,
   LoginInput,
   RegisterInput,
+  ResetPasswordInput,
   UpdateProfileInput,
   User,
 } from '@cadence/shared';
@@ -59,6 +61,39 @@ export function useRegister() {
     onSuccess: (user: User) => {
       queryClient.setQueryData(qk.auth.me(), user);
       void queryClient.invalidateQueries();
+    },
+  });
+}
+
+/**
+ * Requests a reset link.
+ *
+ * `silent` because the page shows the outcome in place — a toast would be the
+ * wrong shape for a message the user needs to read and act on. There is no
+ * cache to touch: nothing about the session has changed.
+ */
+export function useForgotPassword() {
+  return useMutation({
+    mutationFn: (input: ForgotPasswordInput) => authApi.forgotPassword(input),
+    meta: { silent: true },
+  });
+}
+
+/**
+ * Spends a reset link.
+ *
+ * The server deliberately does not sign the user in, so there is no user to
+ * cache; the page sends them to /login afterwards. The cache is cleared all
+ * the same, because the reset revoked every session — including any stale one
+ * this tab was holding.
+ */
+export function useResetPassword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ResetPasswordInput) => authApi.resetPassword(input),
+    meta: { silent: true },
+    onSuccess: () => {
+      queryClient.clear();
     },
   });
 }

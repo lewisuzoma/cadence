@@ -175,6 +175,12 @@ export const handlers = [
 
   http.post(`${API}/auth/register`, () => ok({ user: learnerUser }, 'Account created')),
   http.post(`${API}/auth/logout`, () => ok({ success: true }, 'Signed out')),
+  http.post(`${API}/auth/forgot-password`, () =>
+    ok({ success: true }, 'If an account exists for that email, a reset link is on its way'),
+  ),
+  http.post(`${API}/auth/reset-password`, () =>
+    ok({ success: true }, 'Password updated. Sign in with your new password.'),
+  ),
   http.post(`${API}/auth/refresh`, () => fail(401, 'UNAUTHENTICATED', 'Session expired')),
 
   http.get(`${API}/courses`, () =>

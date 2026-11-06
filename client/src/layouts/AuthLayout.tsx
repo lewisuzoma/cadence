@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { Play } from 'lucide-react';
 import { BrandMark } from '@/components/common/Brand';
 import { Card } from '@/components/ui/card';
@@ -20,7 +20,17 @@ import { cn } from '@/lib/utils';
  * The tab pair lives here rather than in each page, so Sign in and Create
  * account cannot drift apart. The tabs are real links: they change route.
  */
+/**
+ * The tabs belong to the two screens they switch between. On the password
+ * reset screens there is nothing to switch to — the artifact shows a plain
+ * card with a "Back to sign in" link instead — and a tab pair with neither
+ * side selected would be a control that does not describe the current page.
+ */
+const TABBED_ROUTES = ['/login', '/register'];
+
 export function AuthLayout() {
+  const { pathname } = useLocation();
+
   return (
     <div className="min-h-dvh bg-background lg:grid lg:grid-cols-2">
       <a href="#main" className="skip-link">
@@ -31,7 +41,7 @@ export function AuthLayout() {
 
       <div className="flex items-center justify-center px-4 py-10 lg:px-8">
         <Card id="main" className="w-full max-w-md p-6 lg:p-8">
-          <AuthTabs />
+          {TABBED_ROUTES.includes(pathname) ? <AuthTabs /> : null}
           <Outlet />
         </Card>
       </div>

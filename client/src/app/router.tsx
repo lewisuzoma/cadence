@@ -14,6 +14,7 @@ import { LoginPage } from '@/pages/LoginPage';
 import { MyLearningPage } from '@/pages/MyLearningPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 import { RegisterPage } from '@/pages/RegisterPage';
+import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 
 /**
  * Route table.
@@ -68,6 +69,7 @@ export const router = createBrowserRouter([
               { path: '/login', element: <LoginPage /> },
               { path: '/register', element: <RegisterPage /> },
               { path: '/forgot-password', element: <ForgotPasswordPage /> },
+              { path: '/reset-password', element: <ResetPasswordPage /> },
             ],
           },
         ],

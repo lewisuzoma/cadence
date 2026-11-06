@@ -23,8 +23,30 @@ export default function globalSetup(): void {
   process.env.DATABASE_URL = url;
   process.env.NODE_ENV = 'test';
 
-  execSync('npx prisma migrate reset --force --skip-seed --skip-generate', {
-    stdio: 'inherit',
-    env: { ...process.env, DATABASE_URL: url },
-  });
+  try {
+    execSync('npx prisma migrate reset --force --skip-seed --skip-generate', {
+      stdio: 'inherit',
+      env: { ...process.env, DATABASE_URL: url },
+    });
+  } catch (error) {
+    /*
+     * Much the most common cause is that the database itself does not exist
+     * yet: Prisma creates the schema, not the database. Say so with the exact
+     * command, rather than leaving Prisma's generic connection error as the
+     * only clue.
+     */
+    const name = url.split('/').pop()?.split('?')[0] ?? 'cadence_test';
+    throw new Error(
+      [
+        `Could not reset the test database "${name}".`,
+        '',
+        'If it does not exist yet, create it first:',
+        `    docker compose exec db psql -U cadence -d cadence -c "CREATE DATABASE ${name}"`,
+        '',
+        'If the server is not reachable at all, start it with:  docker compose up -d db',
+        '',
+        String(error instanceof Error ? error.message : error),
+      ].join('\n'),
+    );
+  }
 }

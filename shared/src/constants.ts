@@ -31,3 +31,26 @@ export const MAX_PAGE_SIZE = 50;
 
 /** Search inputs debounce before hitting the API (ms). */
 export const SEARCH_DEBOUNCE_MS = 300;
+
+/**
+ * How long a password-reset link stays valid (minutes).  The server stamps
+ * the token row with it and the client quotes it back on the confirmation
+ * screen, so the two can never tell the user different things.
+ */
+export const PASSWORD_RESET_TTL_MINUTES = 30;
+
+/**
+ * The sample lesson video that ships in the client bundle
+ * (`client/public/media`), used by the seed for every lesson and offered as
+ * the default when an admin creates one. Both sides read it from here so a
+ * regenerated video cannot leave one of them quoting the old length.
+ *
+ * `durationSeconds` is the file's real duration — rebuild it with
+ * `npm run lesson:video` and the client's media test will fail if the two
+ * ever drift apart.
+ */
+export const SAMPLE_LESSON_VIDEO = {
+  url: '/media/lesson-sample.mp4',
+  captionsUrl: '/captions/lesson-sample.en.vtt',
+  durationSeconds: 725,
+} as const;

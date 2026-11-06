@@ -339,7 +339,9 @@ ignores the hint gains nothing.
 - An append-only event log, for a real audit trail and for funnel analytics
   (the artifact's "where learners stop" chart needs this).
 - File uploads for thumbnails and video, with a storage layer.
-- Email: verification, password reset.
+- A real mail transport (Mailtrap SMTP) behind `lib/mailer.ts`, which today
+  logs the message rather than sending it; and email verification, which is
+  not implemented at all.
 - Redis for rate limiting and refresh-token revocation, so more than one API
   replica behaves correctly.
 - CI running typecheck, lint and both suites on every push, plus a Playwright

@@ -1,8 +1,10 @@
 import type { Request, Response } from 'express';
 import {
   changePasswordSchema,
+  forgotPasswordSchema,
   loginSchema,
   registerSchema,
+  resetPasswordSchema,
   updateProfileSchema,
 } from '@cadence/shared';
 import { REFRESH_COOKIE, clearAuthCookies, setAuthCookies } from '../../lib/cookies.js';
@@ -47,6 +49,31 @@ export const authController = {
     });
     respondWithSession(res, result);
     ok(res, 'Signed in', { user: result.user });
+  },
+
+  /**
+   * The answer here is a constant. It is the same for a registered address,
+   * an unknown one and a deactivated account, so the endpoint cannot be used
+   * to find out which is which — and the copy says "if an account exists"
+   * rather than implying one does.
+   */
+  async forgotPassword(req: Request, res: Response): Promise<void> {
+    const input = forgotPasswordSchema.parse(req.body);
+    await authService.forgotPassword(input.email);
+    ok(res, 'If an account exists for that email, a reset link is on its way', {
+      success: true,
+    });
+  },
+
+  async resetPassword(req: Request, res: Response): Promise<void> {
+    const input = resetPasswordSchema.parse(req.body);
+    await authService.resetPassword({ token: input.token, password: input.password });
+    // No session is issued: the user signs in with the new password, which is
+    // what proves the reset reached them. Cookies from a previous session on
+    // this device are cleared — its refresh token is revoked, so there is
+    // nothing left for them to renew.
+    clearAuthCookies(res);
+    ok(res, 'Password updated. Sign in with your new password.', { success: true });
   },
 
   async refresh(req: Request, res: Response): Promise<void> {

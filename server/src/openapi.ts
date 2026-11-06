@@ -22,6 +22,7 @@ import {
   enrollmentQuerySchema,
   enrollmentSchema,
   enrollmentWithCourseSchema,
+  forgotPasswordSchema,
   learnerDashboardSchema,
   lessonDetailSchema,
   lessonInputSchema,
@@ -31,6 +32,7 @@ import {
   progressResultSchema,
   registerSchema,
   reorderLessonsSchema,
+  resetPasswordSchema,
   saveProgressSchema,
   adminDashboardSchema,
   userSchema,
@@ -147,6 +149,8 @@ const authUser = z.object({ user: userSchema });
 mutate('post', '/auth/register', { tag: 'Auth', summary: 'Create a learner account', body: registerSchema, response: authUser, status: 201, secure: false });
 mutate('post', '/auth/login', { tag: 'Auth', summary: 'Sign in', body: loginSchema, response: authUser, secure: false });
 mutate('post', '/auth/refresh', { tag: 'Auth', summary: 'Rotate the refresh token', response: authUser, secure: false });
+mutate('post', '/auth/forgot-password', { tag: 'Auth', summary: 'Request a password reset link (always 200, to avoid disclosing whether the account exists)', body: forgotPasswordSchema, response: z.object({ success: z.boolean() }), secure: false });
+mutate('post', '/auth/reset-password', { tag: 'Auth', summary: 'Set a new password from an emailed token (revokes every refresh token; does not sign in)', body: resetPasswordSchema, response: z.object({ success: z.boolean() }), secure: false });
 mutate('post', '/auth/logout', { tag: 'Auth', summary: 'Sign out and revoke the refresh token', response: z.object({ success: z.boolean() }) });
 get('/auth/me', { tag: 'Auth', summary: 'The signed-in user', response: authUser, secure: true });
 mutate('post', '/auth/change-password', { tag: 'Auth', summary: 'Change password (revokes other sessions)', body: changePasswordSchema, response: authUser });

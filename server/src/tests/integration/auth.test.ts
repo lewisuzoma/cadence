@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { authRepository } from '../../modules/auth/auth.repository.js';
+import { mailer } from '../../lib/mailer.js';
 import { REFRESH_COOKIE } from '../../lib/cookies.js';
 import {
   TEST_PASSWORD,
@@ -95,6 +98,24 @@ describe('auth', () => {
     it('signs in with the right password', async () => {
       const response = await api()
         .post('/api/v1/auth/login')
+        .send({ email: 'learner@test.dev', password: TEST_PASSWORD });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.user.email).toBe('learner@test.dev');
+    });
+
+    it('signs in from the browser, which sends an Origin header', async () => {
+      /*
+       * The regression test for a 500 that reached a running stack.  Every
+       * other case here omits `Origin`, so they all took the "not a browser"
+       * branch of the CORS check and passed while the real sign-in was broken.
+       * See tests/integration/cors.test.ts for the rest of that surface.
+       */
+      const response = await api()
+        .post('/api/v1/auth/login')
+        .set('Origin', 'http://localhost:8080')
+        .set('Host', 'localhost:8080')
+        .set('X-Forwarded-Proto', 'http')
         .send({ email: 'learner@test.dev', password: TEST_PASSWORD });
 
       expect(response.status).toBe(200);
@@ -309,6 +330,265 @@ describe('auth', () => {
     });
   });
 
+  describe('password reset', () => {
+    /**
+     * The link is only ever observable through the mail transport, which is
+     * the point: the token appears in no response body. Spying on the
+     * transport is how a test gets hold of the same string a real user would
+     * click.
+     */
+    function captureResetMail() {
+      const sent: { to: string; text: string }[] = [];
+      vi.spyOn(mailer, 'send').mockImplementation(async (mail) => {
+        sent.push({ to: mail.to, text: mail.text });
+      });
+      return {
+        get token(): string {
+          const match = /token=(\S+)/.exec(sent.at(-1)?.text ?? '');
+          if (!match) throw new Error(`No reset link was sent (${sent.length} messages)`);
+          return decodeURIComponent(match[1]!);
+        },
+        get count(): number {
+          return sent.length;
+        },
+        get lastRecipient(): string | undefined {
+          return sent.at(-1)?.to;
+        },
+      };
+    }
+
+    const NEW_PASSWORD = 'BrandNew123';
+    const resetBody = (token: string, password = NEW_PASSWORD) => ({
+      token,
+      password,
+      confirmPassword: password,
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    describe('POST /auth/forgot-password', () => {
+      it('sends a link to a registered address', async () => {
+        await createUser({ email: 'learner@test.dev' });
+        const mail = captureResetMail();
+
+        const response = await api()
+          .post('/api/v1/auth/forgot-password')
+          .send({ email: 'learner@test.dev' });
+
+        expect(response.status).toBe(200);
+        expect(mail.count).toBe(1);
+        expect(mail.lastRecipient).toBe('learner@test.dev');
+        // The token itself never travels back to the browser.
+        expect(JSON.stringify(response.body)).not.toContain(mail.token);
+      });
+
+      it('answers identically for an unknown address, and sends nothing', async () => {
+        const mail = captureResetMail();
+        const known = await createUser({ email: 'learner@test.dev' });
+
+        const registered = await api()
+          .post('/api/v1/auth/forgot-password')
+          .send({ email: known.email });
+        const unknown = await api()
+          .post('/api/v1/auth/forgot-password')
+          .send({ email: 'nobody@test.dev' });
+
+        // The same answer either way: anything else is an oracle for whether
+        // an address has an account here.
+        expect(unknown.status).toBe(registered.status);
+        expect(unknown.body).toEqual(registered.body);
+        expect(mail.count).toBe(1);
+      });
+
+      it('sends nothing for a deactivated account', async () => {
+        await createUser({ email: 'gone@test.dev', isActive: false });
+        const mail = captureResetMail();
+
+        const response = await api()
+          .post('/api/v1/auth/forgot-password')
+          .send({ email: 'gone@test.dev' });
+
+        // A reset must not be a way back into an account an admin closed.
+        expect(response.status).toBe(200);
+        expect(mail.count).toBe(0);
+      });
+
+      it('stores the token hashed, never in the clear', async () => {
+        const user = await createUser({ email: 'learner@test.dev' });
+        const mail = captureResetMail();
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+
+        const row = await prisma.passwordResetToken.findFirst({ where: { userId: user.id } });
+        expect(row).not.toBeNull();
+        expect(row!.tokenHash).not.toBe(mail.token);
+        expect(row!.usedAt).toBeNull();
+      });
+
+      it('supersedes an outstanding link when a second is requested', async () => {
+        const user = await createUser({ email: 'learner@test.dev' });
+        const mail = captureResetMail();
+
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+        const firstToken = mail.token;
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+
+        const response = await api()
+          .post('/api/v1/auth/reset-password')
+          .send(resetBody(firstToken));
+        expect(response.status).toBe(422);
+      });
+
+      it('rejects a malformed email with a field error', async () => {
+        const response = await api()
+          .post('/api/v1/auth/forgot-password')
+          .send({ email: 'not-an-email' });
+
+        expect(response.status).toBe(400);
+        expect(response.body.errors.email).toBeDefined();
+      });
+    });
+
+    describe('POST /auth/reset-password', () => {
+      it('sets the new password, revokes every refresh token, and issues no session', async () => {
+        const user = await createUser({ email: 'learner@test.dev' });
+        const existing = await loginAs(user.email);
+        const mail = captureResetMail();
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+
+        const response = await api()
+          .post('/api/v1/auth/reset-password')
+          .send(resetBody(mail.token));
+
+        expect(response.status).toBe(200);
+        // A reset hands out no session: the user proves the new password by
+        // typing it at sign-in.
+        expect(response.body.data.user).toBeUndefined();
+        const cookies = (response.headers['set-cookie'] as unknown as string[]) ?? [];
+        const accessCookies = cookies.filter((c) => c.startsWith('cadence_access='));
+        // Any access cookie here is the clearing form — empty value, expiry in
+        // the past — and never a freshly minted token.
+        for (const cookie of accessCookies) {
+          expect(cookie).toMatch(/^cadence_access=;/);
+          expect(cookie).toContain('Expires=Thu, 01 Jan 1970');
+        }
+
+        /*
+         * The session that existed before the reset can no longer renew.
+         *
+         * Access tokens are stateless JWTs, so the one that device already
+         * holds keeps working until it expires — at most ACCESS_TOKEN_TTL
+         * (15 minutes). Revoking the refresh token is what ends the session:
+         * the moment the access token lapses there is nothing to rotate
+         * with. This is the same bound `change-password` has, and closing it
+         * entirely would mean a database read on every authenticated request.
+         */
+        expect((await existing.agent.post('/api/v1/auth/refresh')).status).toBe(401);
+        const refreshRows = await prisma.refreshToken.findMany({
+          where: { userId: user.id, revokedAt: null },
+        });
+        expect(refreshRows).toHaveLength(0);
+
+        // Old password refused, new one accepted.
+        const withOld = await api()
+          .post('/api/v1/auth/login')
+          .send({ email: user.email, password: TEST_PASSWORD });
+        expect(withOld.status).toBe(401);
+
+        const withNew = await api()
+          .post('/api/v1/auth/login')
+          .send({ email: user.email, password: NEW_PASSWORD });
+        expect(withNew.status).toBe(200);
+      });
+
+      it('refuses to spend the same link twice', async () => {
+        const user = await createUser({ email: 'learner@test.dev' });
+        const mail = captureResetMail();
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+        const body = resetBody(mail.token);
+
+        expect((await api().post('/api/v1/auth/reset-password').send(body)).status).toBe(200);
+
+        const replay = await api().post('/api/v1/auth/reset-password').send(body);
+        expect(replay.status).toBe(422);
+        expect(replay.body.code).toBe('UNPROCESSABLE');
+      });
+
+      it('refuses an expired link', async () => {
+        const user = await createUser({ email: 'learner@test.dev' });
+        const mail = captureResetMail();
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+
+        // Age the row past its window rather than waiting out the TTL.
+        await prisma.passwordResetToken.updateMany({
+          where: { userId: user.id },
+          data: { expiresAt: new Date(Date.now() - 1000) },
+        });
+
+        const response = await api()
+          .post('/api/v1/auth/reset-password')
+          .send(resetBody(mail.token));
+        expect(response.status).toBe(422);
+      });
+
+      it('gives the same message for unknown, spent and expired links', async () => {
+        const user = await createUser({ email: 'learner@test.dev' });
+        const mail = captureResetMail();
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+        const body = resetBody(mail.token);
+
+        const unknown = await api()
+          .post('/api/v1/auth/reset-password')
+          .send(resetBody('not-a-real-token'));
+        expect(unknown.status).toBe(422);
+
+        await api().post('/api/v1/auth/reset-password').send(body);
+        const spent = await api().post('/api/v1/auth/reset-password').send(body);
+
+        // Which kind of failure it was tells a guesser something and tells
+        // the real user nothing they can act on.
+        expect(spent.body.message).toBe(unknown.body.message);
+      });
+
+      it('enforces the password rules and the confirmation without spending the link', async () => {
+        const user = await createUser({ email: 'learner@test.dev' });
+        const mail = captureResetMail();
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+        const token = mail.token;
+
+        const weak = await api()
+          .post('/api/v1/auth/reset-password')
+          .send(resetBody(token, 'short'));
+        expect(weak.status).toBe(400);
+        expect(weak.body.errors.password).toBeDefined();
+
+        const mismatched = await api().post('/api/v1/auth/reset-password').send({
+          token,
+          password: NEW_PASSWORD,
+          confirmPassword: 'Different123',
+        });
+        expect(mismatched.status).toBe(400);
+        expect(mismatched.body.errors.confirmPassword).toBeDefined();
+
+        // Neither rejected attempt burned the link.
+        const good = await api().post('/api/v1/auth/reset-password').send(resetBody(token));
+        expect(good.status).toBe(200);
+      });
+
+      it('needs no CSRF token, having no session to protect', async () => {
+        const user = await createUser({ email: 'learner@test.dev' });
+        const mail = captureResetMail();
+        await api().post('/api/v1/auth/forgot-password').send({ email: user.email });
+
+        const response = await api()
+          .post('/api/v1/auth/reset-password')
+          .send(resetBody(mail.token));
+        expect(response.status).toBe(200);
+      });
+    });
+  });
+
   describe('POST /auth/change-password', () => {
     it('changes the password and revokes other sessions', async () => {
       await createUser({ email: 'learner@test.dev' });
@@ -357,5 +637,122 @@ describe('auth', () => {
 
       expect(response.status).toBe(401);
     });
+  });
+});
+
+describe('error diagnostics', () => {
+  /*
+   * A 500 in production says only "Something went wrong", by design.  What
+   * makes that bearable is the correlation id: it is on every response and in
+   * every log line for the request, so a user's report can be matched to the
+   * trace that explains it.  Without it the original CORS 500 could not be
+   * tied to anything.
+   */
+  beforeEach(async () => {
+    await resetDb();
+    await createUser({ email: 'learner@test.dev' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const credentials = { email: 'learner@test.dev', password: TEST_PASSWORD };
+
+  it('puts a request id on a successful response', async () => {
+    const response = await api().post('/api/v1/auth/login').send(credentials);
+
+    expect(response.status).toBe(200);
+    expect(response.headers['x-request-id']).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+  });
+
+  it('echoes a well-formed inbound request id, so a trace can span services', async () => {
+    const response = await api()
+      .post('/api/v1/auth/login')
+      .set('X-Request-Id', 'trace-abc-123')
+      .send(credentials);
+
+    expect(response.headers['x-request-id']).toBe('trace-abc-123');
+  });
+
+  it('replaces a malformed inbound request id rather than reflecting it', async () => {
+    const response = await api()
+      .post('/api/v1/auth/login')
+      .set('X-Request-Id', 'not valid! <script>')
+      .send(credentials);
+
+    expect(response.headers['x-request-id']).not.toBe('not valid! <script>');
+    expect(response.headers['x-request-id']).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+  });
+
+  it('returns a 500 carrying a request id that matches the header', async () => {
+    vi.spyOn(authRepository, 'findByEmail').mockRejectedValue(new Error('boom'));
+
+    const response = await api().post('/api/v1/auth/login').send(credentials);
+
+    expect(response.status).toBe(500);
+    expect(response.body.code).toBe('INTERNAL_ERROR');
+    expect(response.body.requestId).toBeTruthy();
+    expect(response.body.requestId).toBe(response.headers['x-request-id']);
+  });
+
+  it('reports a dropped database connection as 503, not 500', async () => {
+    /*
+     * P1017 is what a restarted Postgres actually produces, and it arrives as
+     * a PrismaClientKnownRequestError -- so it slipped past a check that only
+     * looked for PrismaClientInitializationError and was reported as a 500.
+     */
+    vi.spyOn(authRepository, 'findByEmail').mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Server has closed the connection.', {
+        code: 'P1017',
+        clientVersion: '5.22.0',
+      }),
+    );
+
+    const response = await api().post('/api/v1/auth/login').send(credentials);
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('SERVICE_UNAVAILABLE');
+    expect(response.body.requestId).toBe(response.headers['x-request-id']);
+  });
+
+  it('still maps a query-level Prisma error to 500', async () => {
+    // P2xxx is about the request, not the connection: not a 503.
+    vi.spyOn(authRepository, 'findByEmail').mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Table does not exist', {
+        code: 'P2021',
+        clientVersion: '5.22.0',
+      }),
+    );
+
+    const response = await api().post('/api/v1/auth/login').send(credentials);
+
+    expect(response.status).toBe(500);
+    expect(response.body.code).toBe('INTERNAL_ERROR');
+  });
+
+  it('reports an unreachable database as 503, not 500', async () => {
+    // The API is up; a dependency is not.  That distinction is what tells the
+    // client to retry, and /api/v1/health already draws it the same way.
+    vi.spyOn(authRepository, 'findByEmail').mockRejectedValue(
+      new Prisma.PrismaClientInitializationError('Cannot reach database', '5.0.0'),
+    );
+
+    const response = await api().post('/api/v1/auth/login').send(credentials);
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('SERVICE_UNAVAILABLE');
+    expect(response.body.requestId).toBe(response.headers['x-request-id']);
+  });
+
+  it('leaves a 4xx body free of the request id, keeping user-facing copy clean', async () => {
+    const response = await api()
+      .post('/api/v1/auth/login')
+      .send({ email: 'learner@test.dev', password: 'Wrong12345' });
+
+    expect(response.status).toBe(401);
+    expect(response.body.requestId).toBeUndefined();
+    // Still correlatable from the header when support needs it.
+    expect(response.headers['x-request-id']).toBeTruthy();
   });
 });

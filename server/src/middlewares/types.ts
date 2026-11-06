@@ -19,6 +19,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthUser;
+      /** Set by the `requestId` middleware; see middlewares/requestId.ts. */
+      requestId?: string;
     }
   }
 }

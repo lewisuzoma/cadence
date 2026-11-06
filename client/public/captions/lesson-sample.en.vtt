@@ -1,19 +1,43 @@
 WEBVTT
 
 NOTE
-Captions for the seeded sample lessons. Served from the client bundle, so no
-request leaves the origin. Replace per-lesson by setting `captionsUrl`.
+Captions for the bundled sample lesson video (/media/lesson-sample.mp4).
+Generated with it by scripts/make-lesson-video.mjs — edit the slide script
+there, not this file. Served from the client bundle, so no request leaves
+the origin. Replace per-lesson by setting `captionsUrl`.
 
 00:00:00.000 --> 00:00:04.000
 Welcome back. In this lesson we define one schema per request body.
 
-00:00:04.000 --> 00:00:09.500
+00:00:25.000 --> 00:00:30.500
 We infer the TypeScript type from that schema, so there is a single
 source of truth for both validation and types.
 
-00:00:09.500 --> 00:00:15.000
-Then we return structured 422 errors the frontend can map straight onto
-form fields.
+00:00:30.500 --> 00:00:36.000
+Then we return structured 422 errors the frontend can map onto fields.
 
-00:00:15.000 --> 00:00:20.000
+00:01:20.000 --> 00:01:26.000
+The schema lives in the shared package, so the client and the server
+read the same rules.
+
+00:02:45.000 --> 00:02:51.000
+The type is inferred, so a hand-written interface can never drift from it.
+
+00:04:10.000 --> 00:04:16.000
+One middleware parses the body, so a controller only ever sees data
+that has already passed.
+
+00:05:35.000 --> 00:05:41.000
+Errors come back keyed by field name, which is what a form needs.
+
+00:07:00.000 --> 00:07:06.000
+The client sets each field error it is handed, and keeps no rules of its own.
+
+00:08:25.000 --> 00:08:31.000
+Browser validation is a courtesy. The server check is the one that counts.
+
+00:09:50.000 --> 00:09:56.000
 That means a validation rule is written once and enforced everywhere.
+
+00:11:20.000 --> 00:11:25.000
+Next: moving the rules out of the controller and into a service layer.

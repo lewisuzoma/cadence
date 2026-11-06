@@ -42,6 +42,10 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-cadence}:${POSTGRES_PASSWORD:-cadence_dev_password}@db:5432/${POSTGRES_DB:-cadence}?schema=public
+      # Set here, not left to .env: the SPA's public URL differs between the
+      # host (Vite on :5173) and this stack (nginx on CLIENT_PORT), and every
+      # value that differs is Compose's to supply.
+      APP_URL: http://localhost:${CLIENT_PORT:-8080}
     depends_on:
       db:
         condition: service_healthy
@@ -58,6 +62,9 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgresql://${POSTGRES_USER:-cadence}:${POSTGRES_PASSWORD:-cadence_dev_password}@db:5432/${POSTGRES_DB:-cadence}?schema=public
+      # See the note on the migrate service: the SPA's public URL differs
+      # between the host and this stack, so Compose owns it.
+      APP_URL: http://localhost:${CLIENT_PORT:-8080}
     # Exposed for direct API pokes and /api/docs; the browser uses :8080.
     ports:
       - '${API_PORT:-4000}:4000'

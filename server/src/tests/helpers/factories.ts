@@ -22,7 +22,7 @@ export function testApp(): Express {
 export async function resetDb(): Promise<void> {
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE "lesson_progress", "enrollments", "lessons", "modules",
-                   "courses", "refresh_tokens", "users"
+                   "courses", "refresh_tokens", "password_reset_tokens", "users"
     RESTART IDENTITY CASCADE
   `);
 }

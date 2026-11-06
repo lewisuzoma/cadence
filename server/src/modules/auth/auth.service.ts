@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { Role, User } from '@cadence/shared';
+import { PASSWORD_RESET_TTL_MINUTES, type Role, type User } from '@cadence/shared';
 import { env } from '../../config/env.js';
 import {
   AccountInactiveError,
@@ -7,6 +7,7 @@ import {
   InvalidCredentialsError,
   NotFoundError,
   UnauthenticatedError,
+  UnprocessableError,
 } from '../../lib/errors.js';
 import {
   durationToMs,
@@ -16,6 +17,7 @@ import {
   verifyRefreshToken,
 } from '../../lib/jwt.js';
 import { logger } from '../../lib/logger.js';
+import { sendPasswordResetEmail } from '../../lib/mailer.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
 import { authRepository, type PublicUserRow } from './auth.repository.js';
 
@@ -44,6 +46,22 @@ function refreshTtlFor(rememberMe: boolean): string {
   return rememberMe ? env.REFRESH_TOKEN_TTL_REMEMBERED : env.REFRESH_TOKEN_TTL;
 }
 
+/**
+ * A real hash to compare against when the email is unknown, so an unknown
+ * address costs the same time as a wrong password and cannot be distinguished
+ * from one.  Built lazily rather than written out as a literal: bcryptjs
+ * short-circuits on any hash that is not exactly 60 characters, and the
+ * hand-written constant this replaces was 66 -- so it returned `false`
+ * immediately and the defence was inert.  Hashing a random value at the
+ * configured cost is correct by construction.
+ *
+ * Lazy, not module-level, so start-up is not blocked on a cost-12 hash.
+ */
+let dummyPasswordHash: Promise<string> | undefined;
+function getDummyPasswordHash(): Promise<string> {
+  return (dummyPasswordHash ??= hashPassword(crypto.randomUUID()));
+}
+
 async function issueTokens(
   userId: string,
   role: Role,
@@ -60,6 +78,16 @@ async function issueTokens(
     expiresAt: new Date(Date.now() + durationToMs(ttl)),
   });
   return { accessToken: signAccessToken(userId, role), refreshToken, refreshTtl: ttl };
+}
+
+const PASSWORD_RESET_TTL_MS = PASSWORD_RESET_TTL_MINUTES * 60 * 1000;
+
+/**
+ * The secret that goes in the emailed link.  256 bits from the CSPRNG, in
+ * base64url so it survives a URL untouched; only its hash is ever stored.
+ */
+function newResetToken(): string {
+  return crypto.randomBytes(32).toString('base64url');
 }
 
 export const authService = {
@@ -95,7 +123,7 @@ export const authService = {
     // Hash a dummy value when the account does not exist, so the response
     // time does not reveal whether an email is registered.
     if (!user) {
-      await verifyPassword(input.password, '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidinv');
+      await verifyPassword(input.password, await getDummyPasswordHash());
       throw new InvalidCredentialsError();
     }
 
@@ -183,6 +211,93 @@ export const authService = {
     if (stored && !stored.revokedAt) {
       await authRepository.revokeToken(stored.id);
     }
+  },
+
+  /**
+   * Step one of a self-service reset.
+   *
+   * Returns nothing, whatever happened. An unknown address, a deactivated
+   * account and a successful send are indistinguishable from the outside —
+   * otherwise this endpoint would answer "is this person a user here?" for
+   * anyone who asked, which is exactly what the sign-in path goes to such
+   * lengths to avoid.
+   *
+   * It does not throw if the mail fails either: that would leak the same
+   * thing by the back door (only a real account can produce a send error).
+   * The failure is logged, which is where an operator should be looking.
+   */
+  async forgotPassword(email: string): Promise<void> {
+    const user = await authRepository.findByEmail(email);
+    // No link for an account an administrator has deactivated: a reset must
+    // not be a way back in.
+    if (!user || !user.isActive) {
+      logger.info({ email }, 'Password reset requested for an unusable address — not sending');
+      return;
+    }
+
+    // Asking again supersedes the last link, so a mailbox never accumulates
+    // several live tokens.
+    await authRepository.invalidatePasswordResets(user.id);
+
+    const token = newResetToken();
+    await authRepository.createPasswordResetToken({
+      userId: user.id,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
+    });
+
+    // Built from configuration, never from the request's Host header.
+    const resetUrl = `${env.APP_URL}/reset-password?token=${encodeURIComponent(token)}`;
+
+    try {
+      await sendPasswordResetEmail({
+        to: user.email,
+        firstName: user.firstName,
+        resetUrl,
+      });
+    } catch (error) {
+      logger.error({ err: error, userId: user.id }, 'Failed to send the password reset email');
+    }
+  },
+
+  /**
+   * Step two: spend the token and set the new password.
+   *
+   * Deliberately does NOT sign the user in. A reset is the one moment the
+   * account is being recovered by whoever holds the mailbox, and making them
+   * type the new password into the sign-in screen proves it reached the right
+   * person rather than handing a session straight to a link-follower.
+   *
+   * Every refresh token is revoked: if the reason for the reset is that
+   * someone else had the old password, leaving their session renewable
+   * defeats the point. An access token already issued keeps working until it
+   * expires (at most ACCESS_TOKEN_TTL), which is the same bound
+   * `changePassword` carries — closing it would cost a database read on
+   * every authenticated request.
+   */
+  async resetPassword(input: { token: string; password: string }): Promise<void> {
+    const invalid = new UnprocessableError(
+      'This reset link is no longer valid. Request a new one.',
+    );
+
+    const stored = await authRepository.findPasswordResetToken(hashToken(input.token));
+    // One message for unknown, spent and expired alike — which it is tells a
+    // guesser something, and tells the real user nothing they can act on.
+    if (!stored || stored.usedAt || stored.expiresAt.getTime() <= Date.now()) throw invalid;
+    if (!stored.user.isActive) throw new AccountInactiveError();
+
+    const redeemed = await authRepository.redeemPasswordReset({
+      tokenId: stored.id,
+      userId: stored.userId,
+      passwordHash: await hashPassword(input.password),
+    });
+    // Lost the race with a concurrent redemption of the same link.
+    if (!redeemed) throw invalid;
+
+    logger.info(
+      { userId: stored.userId },
+      'Password reset completed — every refresh token revoked',
+    );
   },
 
   async me(userId: string): Promise<User> {

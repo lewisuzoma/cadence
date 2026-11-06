@@ -22,15 +22,20 @@ export function noContent(res: Response): Response {
   return res.status(204).send();
 }
 
+/**
+ * `requestId` is appended last so no existing call site has to change; the
+ * error handler passes it for 5xx responses only.
+ */
 export function fail(
   res: Response,
   status: number,
   code: ErrorCode,
   message: string,
   errors?: Record<string, string[]>,
+  requestId?: string,
 ): Response {
-  const body: ApiFailure = errors
-    ? { success: false, message, code, errors }
-    : { success: false, message, code };
+  const body: ApiFailure = { success: false, message, code };
+  if (errors) body.errors = errors;
+  if (requestId) body.requestId = requestId;
   return res.status(status).json(body);
 }
