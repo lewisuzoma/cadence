@@ -330,6 +330,20 @@ through `@font-face`. There are no requests to any font CDN.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the layering, the data model, the
 auth design, the progress-tracking approach and the trade-offs taken.
 
+## Deploying
+
+[docs/deploy-laravel-cloud.md](docs/deploy-laravel-cloud.md) is a step-by-step
+guide to a live deployment on Laravel Cloud (which runs Node, not only PHP),
+with managed Postgres. Its last section covers any other single-process host —
+Render, Railway, Fly.io, a bare VM — since the three settings are the same.
+
+Away from Compose there is no nginx to serve the SPA and proxy `/api`, so the
+server serves the client build itself when it finds one next to its own
+(`server/src/middlewares/serveClient.ts`). That keeps the API and the SPA on
+one origin, which is what keeps the auth cookies first-party. Inside the
+server's Docker image there is no client build, so under Compose the server
+stays API-only and nginx keeps its job.
+
 ## Known limitations and next steps
 
 - **Video is trusted to the client.** The server records positions the browser

@@ -12,6 +12,7 @@ import { ok } from './lib/response.js';
 import { asyncHandler, errorHandler, notFoundHandler } from './middlewares/errorHandler.js';
 import { apiLimiter } from './middlewares/rateLimit.js';
 import { requestId } from './middlewares/requestId.js';
+import { mountClient } from './middlewares/serveClient.js';
 import { buildOpenApiDocument } from './openapi.js';
 import { apiRouter } from './routes.js';
 
@@ -165,6 +166,25 @@ export function createApp(): Express {
 
   // --- the API -----------------------------------------------------------
   app.use('/api/v1', apiLimiter, apiRouter);
+
+  /*
+   * The SPA, but only where one was deployed alongside this process.
+   *
+   * Under Compose this does nothing: nginx serves the client and the server
+   * image carries no client build, so there is nothing to mount.  On a
+   * single-process host — Laravel Cloud, Render, a bare VM — there is no
+   * nginx to proxy /api, so the API and the SPA have to share this port.
+   * Serving both from one origin is also what keeps the auth cookies
+   * first-party there, exactly as nginx does here.
+   *
+   * Mounted after the API so it can never shadow a route, and before the 404
+   * handler so unknown /api paths still answer with JSON.
+   *
+   * Never under test: whether a `client/dist` exists on the machine running
+   * the suite is an accident of whether anyone has built the client, and a
+   * test that passes or fails on that is worse than no test at all.
+   */
+  if (!isTest) mountClient(app);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
