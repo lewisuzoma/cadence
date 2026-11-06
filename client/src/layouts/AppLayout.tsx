@@ -260,17 +260,3 @@ export function AdminLayout() {
     </div>
   );
 }
-
-/** The centred card layout for /login and /register. */
-export function AuthLayout() {
-  return (
-    <div className="flex min-h-dvh flex-col bg-background">
-      <header className="container flex h-17 items-center">
-        <Wordmark to="/courses" />
-      </header>
-      <main id="main" className="container flex flex-1 items-center justify-center py-10">
-        <Outlet />
-      </main>
-    </div>
-  );
-}

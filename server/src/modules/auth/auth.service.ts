@@ -19,7 +19,8 @@ import { logger } from '../../lib/logger.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
 import { authRepository, type PublicUserRow } from './auth.repository.js';
 
-export type TokenPair = { accessToken: string; refreshToken: string };
+/** `refreshTtl` travels with the pair so the cookie matches the DB row. */
+export type TokenPair = { accessToken: string; refreshToken: string; refreshTtl: string };
 export type AuthResult = { user: User; tokens: TokenPair };
 
 function toPublicUser(row: PublicUserRow): User {
@@ -34,16 +35,31 @@ function toPublicUser(row: PublicUserRow): User {
   };
 }
 
-async function issueTokens(userId: string, role: Role, familyId?: string): Promise<TokenPair> {
-  const family = familyId ?? crypto.randomUUID();
+/**
+ * Which refresh lifetime a session gets. "Keep me signed in" buys a longer
+ * refresh token; it never lengthens the access token, so the user row is
+ * still re-read every 15 minutes and a deactivation still bites immediately.
+ */
+function refreshTtlFor(rememberMe: boolean): string {
+  return rememberMe ? env.REFRESH_TOKEN_TTL_REMEMBERED : env.REFRESH_TOKEN_TTL;
+}
+
+async function issueTokens(
+  userId: string,
+  role: Role,
+  options?: { familyId?: string; rememberMe?: boolean },
+): Promise<TokenPair> {
+  const family = options?.familyId ?? crypto.randomUUID();
+  const ttl = refreshTtlFor(options?.rememberMe ?? false);
   const { token: refreshToken } = signRefreshToken(userId, family);
   await authRepository.createRefreshToken({
     userId,
     tokenHash: hashToken(refreshToken),
     familyId: family,
-    expiresAt: new Date(Date.now() + durationToMs(env.REFRESH_TOKEN_TTL)),
+    // The row's expiry and the cookie's maxAge come from the same value.
+    expiresAt: new Date(Date.now() + durationToMs(ttl)),
   });
-  return { accessToken: signAccessToken(userId, role), refreshToken };
+  return { accessToken: signAccessToken(userId, role), refreshToken, refreshTtl: ttl };
 }
 
 export const authService = {
@@ -69,7 +85,11 @@ export const authService = {
     return { user: toPublicUser(user), tokens };
   },
 
-  async login(input: { email: string; password: string }): Promise<AuthResult> {
+  async login(input: {
+    email: string;
+    password: string;
+    rememberMe?: boolean;
+  }): Promise<AuthResult> {
     const user = await authRepository.findByEmail(input.email);
 
     // Hash a dummy value when the account does not exist, so the response
@@ -85,7 +105,9 @@ export const authService = {
     // someone guessing emails.
     if (!user.isActive) throw new AccountInactiveError();
 
-    const tokens = await issueTokens(user.id, user.role);
+    const tokens = await issueTokens(user.id, user.role, {
+      rememberMe: input.rememberMe ?? false,
+    });
     return {
       user: toPublicUser(user),
       tokens,
@@ -123,13 +145,25 @@ export const authService = {
     if (!user) throw new UnauthenticatedError('Your session is no longer valid');
     if (!user.isActive) throw new AccountInactiveError();
 
+    /*
+     * Rotation preserves the chain's original lifetime, so a remembered
+     * session is not silently downgraded to 7 days on its first refresh.
+     * The remaining life of the presented token is the source of truth —
+     * there is no need to store a "remembered" flag on the row.
+     */
+    const remainingMs = stored.expiresAt.getTime() - stored.createdAt.getTime();
+    const rotatedTtl =
+      remainingMs > durationToMs(env.REFRESH_TOKEN_TTL)
+        ? env.REFRESH_TOKEN_TTL_REMEMBERED
+        : env.REFRESH_TOKEN_TTL;
+
     const { token: nextRefresh } = signRefreshToken(user.id, payload.fid);
     await authRepository.rotate({
       oldTokenId: stored.id,
       userId: user.id,
       tokenHash: hashToken(nextRefresh),
       familyId: payload.fid,
-      expiresAt: new Date(Date.now() + durationToMs(env.REFRESH_TOKEN_TTL)),
+      expiresAt: new Date(Date.now() + durationToMs(rotatedTtl)),
     });
 
     return {
@@ -137,6 +171,7 @@ export const authService = {
       tokens: {
         accessToken: signAccessToken(user.id, user.role),
         refreshToken: nextRefresh,
+        refreshTtl: rotatedTtl,
       },
     };
   },

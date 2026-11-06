@@ -10,11 +10,22 @@ import { cn } from '@/lib/utils';
  * Cobalt is reserved for actions, so using it for the logo would make the
  * brand compete with every primary button on the page.
  */
-export function BrandMark({ className }: { className?: string }) {
+export function BrandMark({
+  className,
+  /**
+   * On the cobalt sign-in panel the mark flips: a white tile with a cobalt
+   * glyph. Everywhere else it is an Ink tile with a white glyph.
+   */
+  inverted = false,
+}: {
+  className?: string;
+  inverted?: boolean;
+}) {
   return (
     <span
       className={cn(
-        'flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground',
+        'flex size-9 shrink-0 items-center justify-center rounded-md',
+        inverted ? 'bg-card text-primary' : 'bg-foreground text-background',
         className,
       )}
       aria-hidden="true"
@@ -23,7 +34,6 @@ export function BrandMark({ className }: { className?: string }) {
         <path
           d="M3 13.2c2.4 0 2.6-6.2 5-6.2s2.6 10 5 10 2.6-6.2 5-6.2h3"
           stroke="currentColor"
-          className="text-background"
           strokeWidth="2.2"
           strokeLinecap="round"
           strokeLinejoin="round"

@@ -17,7 +17,12 @@ import { authService, type AuthResult } from './auth.service.js';
 
 /** Tokens go into httpOnly cookies and never into a response body. */
 function respondWithSession(res: Response, result: AuthResult): void {
-  setAuthCookies(res, result.tokens.accessToken, result.tokens.refreshToken);
+  setAuthCookies(
+    res,
+    result.tokens.accessToken,
+    result.tokens.refreshToken,
+    result.tokens.refreshTtl,
+  );
 }
 
 export const authController = {
@@ -35,7 +40,11 @@ export const authController = {
 
   async login(req: Request, res: Response): Promise<void> {
     const input = loginSchema.parse(req.body);
-    const result = await authService.login(input);
+    const result = await authService.login({
+      email: input.email,
+      password: input.password,
+      rememberMe: input.rememberMe,
+    });
     respondWithSession(res, result);
     ok(res, 'Signed in', { user: result.user });
   },

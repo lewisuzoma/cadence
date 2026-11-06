@@ -1,12 +1,14 @@
 import { Suspense, lazy } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { FullPageSpinner } from '@/components/common/FullPageSpinner';
-import { AdminLayout, AppLayout, AuthLayout } from '@/layouts/AppLayout';
+import { AdminLayout, AppLayout } from '@/layouts/AppLayout';
+import { AuthLayout } from '@/layouts/AuthLayout';
 import { GuestRoute, ProtectedRoute, RoleRoute } from '@/routes/guards';
 import { CatalogPage } from '@/pages/CatalogPage';
 import { CourseDetailPage } from '@/pages/CourseDetailPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { ForbiddenPage, NotFoundPage, RouteErrorBoundary } from '@/pages/ErrorPages';
+import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { LessonPage } from '@/pages/LessonPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { MyLearningPage } from '@/pages/MyLearningPage';
@@ -65,6 +67,7 @@ export const router = createBrowserRouter([
             children: [
               { path: '/login', element: <LoginPage /> },
               { path: '/register', element: <RegisterPage /> },
+              { path: '/forgot-password', element: <ForgotPasswordPage /> },
             ],
           },
         ],

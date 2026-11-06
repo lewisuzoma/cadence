@@ -20,6 +20,11 @@ const envSchema = z
     JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 characters'),
     ACCESS_TOKEN_TTL: z.string().regex(durationPattern, 'Use a value like 15m').default('15m'),
     REFRESH_TOKEN_TTL: z.string().regex(durationPattern, 'Use a value like 7d').default('7d'),
+    /** Used when the learner ticks "keep me signed in" at sign-in. */
+    REFRESH_TOKEN_TTL_REMEMBERED: z
+      .string()
+      .regex(durationPattern, 'Use a value like 30d')
+      .default('30d'),
     BCRYPT_COST: z.coerce.number().int().min(4).max(15).default(12),
 
     /** Comma-separated allow-list, used only on the non-Docker dev path. */

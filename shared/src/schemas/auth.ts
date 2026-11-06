@@ -47,6 +47,14 @@ export type RegisterInput = z.infer<typeof registerSchema>;
 export const loginSchema = z.object({
   email: emailSchema,
   password: z.string().min(1, 'Password is required'),
+  /**
+   * "Keep me signed in for 30 days", from the sign-in screen.
+   *
+   * It extends the refresh token's lifetime only. The access token stays
+   * short either way, so even a remembered session is re-checked against the
+   * user row every 15 minutes and a deactivation still takes effect.
+   */
+  rememberMe: z.boolean().default(false),
 });
 export type LoginInput = z.infer<typeof loginSchema>;
 

@@ -116,6 +116,53 @@ describe('auth', () => {
       expect(wrongPassword.body.code).toBe('INVALID_CREDENTIALS');
     });
 
+    it('issues a 7-day refresh token by default', async () => {
+      const response = await api()
+        .post('/api/v1/auth/login')
+        .send({ email: 'learner@test.dev', password: TEST_PASSWORD });
+
+      expect(response.status).toBe(200);
+      const token = await prisma.refreshToken.findFirst({ orderBy: { createdAt: 'desc' } });
+      const days = (token!.expiresAt.getTime() - Date.now()) / 86_400_000;
+      expect(days).toBeGreaterThan(6.5);
+      expect(days).toBeLessThan(7.5);
+    });
+
+    it('extends the refresh token to 30 days when "keep me signed in" is ticked', async () => {
+      const response = await api()
+        .post('/api/v1/auth/login')
+        .send({ email: 'learner@test.dev', password: TEST_PASSWORD, rememberMe: true });
+
+      expect(response.status).toBe(200);
+      const token = await prisma.refreshToken.findFirst({ orderBy: { createdAt: 'desc' } });
+      const days = (token!.expiresAt.getTime() - Date.now()) / 86_400_000;
+      expect(days).toBeGreaterThan(29.5);
+      expect(days).toBeLessThan(30.5);
+
+      // The access cookie is unchanged: a remembered session is still
+      // re-validated against the user row every 15 minutes.
+      const cookies = (response.headers['set-cookie'] as unknown as string[]) ?? [];
+      const access = cookies.find((cookie) => cookie.startsWith('cadence_access='));
+      expect(access).toContain('Max-Age=900');
+    });
+
+    it('keeps the longer lifetime when a remembered session is rotated', async () => {
+      const agent = request.agent(testApp());
+      await agent
+        .post('/api/v1/auth/login')
+        .send({ email: 'learner@test.dev', password: TEST_PASSWORD, rememberMe: true });
+
+      expect((await agent.post('/api/v1/auth/refresh')).status).toBe(200);
+
+      const rotated = await prisma.refreshToken.findFirst({
+        where: { revokedAt: null },
+        orderBy: { createdAt: 'desc' },
+      });
+      const days = (rotated!.expiresAt.getTime() - Date.now()) / 86_400_000;
+      // Rotation must not quietly downgrade the session back to 7 days.
+      expect(days).toBeGreaterThan(29.5);
+    });
+
     it('refuses a deactivated account with 403', async () => {
       await createUser({ email: 'gone@test.dev', isActive: false });
       const response = await api()

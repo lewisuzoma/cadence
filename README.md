@@ -12,7 +12,7 @@ the whole stack runs from one command with Docker Compose.
 | **Client** | React 18 · TypeScript (strict) · Vite · React Router · TanStack Query v5 · Tailwind + Radix (shadcn-style primitives) |
 | **Server** | Node 20 · TypeScript · Express · Zod · Prisma · PostgreSQL 16 |
 | **Shared** | One Zod schema set used for API validation, TypeScript types, OpenAPI and client forms |
-| **Tests** | 213 passing — 154 server (against a real Postgres) + 59 client (jsdom + MSW) |
+| **Tests** | 221 passing — 157 server (against a real Postgres) + 64 client (jsdom + MSW) |
 
 ---
 
@@ -102,9 +102,9 @@ runs the client suite, and exits non-zero if either fails.
 
 ```
 test-server-1  |  Test Files  10 passed (10)
-test-server-1  |       Tests  154 passed (154)
+test-server-1  |       Tests  157 passed (157)
 test-client-1  |  Test Files  8 passed (8)
-test-client-1  |       Tests  59 passed (59)
+test-client-1  |       Tests  64 passed (64)
 
 ✓ server and client suites passed inside Compose
 ```
@@ -188,6 +188,7 @@ secrets.
 | `JWT_REFRESH_SECRET` | yes | dev placeholder | ≥ 32 chars, and must differ from the access secret in production |
 | `ACCESS_TOKEN_TTL` | no | `15m` | |
 | `REFRESH_TOKEN_TTL` | no | `7d` | Also the refresh cookie's `maxAge` |
+| `REFRESH_TOKEN_TTL_REMEMBERED` | no | `30d` | Used when "keep me signed in" is ticked at sign-in |
 | `BCRYPT_COST` | no | `12` | The test profile lowers it to 4 for speed |
 | `NODE_ENV` | no | `production` | `development` enables pretty logs |
 | `PORT` | no | `4000` | API port inside the container |

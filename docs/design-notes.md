@@ -218,9 +218,9 @@ these are either derived honestly or left out. Nothing is faked.
 | Trend deltas ("6.2% vs prior 7 days") | desktop p8 | Omitted — needs a time-series snapshot |
 | Notification bell + unread dot | desktop p4 | Omitted — no notification model |
 | "Video ready · HLS" | desktop p9 | Replaced with a real has-video state read from `videoUrl` |
-| "Keep me signed in for 30 days" | desktop p3, mobile p2 | Omitted — the refresh TTL is a fixed 7 days server-side |
-| "Forgot password?" | desktop p3 | Omitted — no mail transport in scope |
-| Prototype shortcuts ("Demo learner") | desktop p3 | Omitted — seeded credentials are in the README |
+| "Keep me signed in for 30 days" | desktop p2, mobile p1 | **Implemented.** Ticking it issues a 30-day refresh token instead of 7 (`REFRESH_TOKEN_TTL_REMEMBERED`); rotation preserves the longer life. The access token stays 15 minutes either way, so the user row is still re-checked and a deactivation still bites |
+| "Forgot password?" | desktop p2, mobile p1 | **Link is present and resolves** to `/forgot-password`, which explains that this deployment has no mail transport and points at the admin. Self-service reset is still not implemented, but the link is not a dead control |
+| Prototype shortcuts ("Demo learner →", "Demo admin →") | desktop p2, mobile p1 | **Implemented.** They fill the seeded credentials into the form rather than signing in silently, so what is about to be submitted stays visible |
 | Sort "Most popular" | desktop p4 | Replaced with the spec's sorts (newest / oldest / title / duration) |
 
 Every remaining control on every screen is wired to a real endpoint.

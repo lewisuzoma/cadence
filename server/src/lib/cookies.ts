@@ -21,7 +21,19 @@ const base: CookieOptions = {
   path: '/',
 };
 
-export function setAuthCookies(res: Response, accessToken: string, refreshToken: string): string {
+/**
+ * `refreshTtl` lets a remembered session carry the longer lifetime. It is
+ * passed explicitly rather than read from env here, so the cookie's maxAge
+ * can never disagree with the expiry stored on the token row.
+ */
+export function setAuthCookies(
+  res: Response,
+  accessToken: string,
+  refreshToken: string,
+  refreshTtl: string = env.REFRESH_TOKEN_TTL,
+): string {
+  const refreshMaxAge = durationToMs(refreshTtl);
+
   res.cookie(ACCESS_COOKIE, accessToken, {
     ...base,
     maxAge: durationToMs(env.ACCESS_TOKEN_TTL),
@@ -29,13 +41,13 @@ export function setAuthCookies(res: Response, accessToken: string, refreshToken:
   res.cookie(REFRESH_COOKIE, refreshToken, {
     ...base,
     path: REFRESH_COOKIE_PATH,
-    maxAge: durationToMs(env.REFRESH_TOKEN_TTL),
+    maxAge: refreshMaxAge,
   });
   const csrfToken = randomCsrfToken();
   res.cookie(CSRF_COOKIE, csrfToken, {
     ...base,
     httpOnly: false, // the client must read this one to echo it back
-    maxAge: durationToMs(env.REFRESH_TOKEN_TTL),
+    maxAge: refreshMaxAge,
   });
   return csrfToken;
 }
