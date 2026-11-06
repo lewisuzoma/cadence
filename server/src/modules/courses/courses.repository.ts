@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import type { CourseSort } from '@cadence/shared';
 import { prisma } from '../../lib/prisma.js';
 

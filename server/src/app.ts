@@ -8,7 +8,7 @@ import { corsOrigins, isTest } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { assertDatabaseReachable } from './lib/prisma.js';
 import { ok } from './lib/response.js';
-import { errorHandler, notFoundHandler } from './middlewares/errorHandler.js';
+import { asyncHandler, errorHandler, notFoundHandler } from './middlewares/errorHandler.js';
 import { apiLimiter } from './middlewares/rateLimit.js';
 import { buildOpenApiDocument } from './openapi.js';
 import { apiRouter } from './routes.js';
@@ -62,23 +62,30 @@ export function createApp(): Express {
   // --- health ------------------------------------------------------------
   // Reports healthy only when a real query succeeds, which is what Compose
   // waits on before starting the client.
-  app.get('/api/v1/health', async (_req, res) => {
-    try {
-      await assertDatabaseReachable();
-      ok(res, 'Healthy', {
-        status: 'ok',
-        database: 'reachable',
-        uptime: Math.round(process.uptime()),
-      });
-    } catch (error) {
-      logger.error({ err: error }, 'Health check failed: database unreachable');
-      res.status(503).json({
-        success: false,
-        message: 'Database unreachable',
-        code: 'INTERNAL_ERROR',
-      });
-    }
-  });
+  app.get(
+    '/api/v1/health',
+    // Wrapped so the promise cannot float: Express 4 does not await handlers,
+    // and an unhandled rejection here would take the process down.
+    asyncHandler(async (_req, res) => {
+      try {
+        await assertDatabaseReachable();
+        ok(res, 'Healthy', {
+          status: 'ok',
+          database: 'reachable',
+          uptime: Math.round(process.uptime()),
+        });
+      } catch (error) {
+        logger.error({ err: error }, 'Health check failed: database unreachable');
+        // 503, not 500: the API is up but cannot serve, which is exactly the
+        // distinction a container health check needs.
+        res.status(503).json({
+          success: false,
+          message: 'Database unreachable',
+          code: 'INTERNAL_ERROR',
+        });
+      }
+    }),
+  );
 
   // --- API docs ----------------------------------------------------------
   const openApiDocument = buildOpenApiDocument();

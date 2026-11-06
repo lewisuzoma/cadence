@@ -4,9 +4,9 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "./dist",
-    "rootDir": "./src",
-    "types": ["node"]
+    "rootDir": ".",
+    "types": ["node"],
+    "noEmit": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/tests/**/*", "**/*.test.ts"]
+  "include": ["src/**/*.ts", "prisma/**/*.ts", "vitest.config.ts"]
 }

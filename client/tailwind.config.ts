@@ -121,6 +121,8 @@ export default {
       spacing: {
         // The 4 · 8 · 12 · 16 · 24 · 32 · 48 · 72 rhythm, named.
         '4.5': '1.125rem',
+        // 68px: the top bar height measured from the artifact.
+        '17': '4.25rem',
         '18': '4.5rem', // 72
       },
       keyframes: {

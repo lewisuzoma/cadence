@@ -6,6 +6,15 @@ import { prisma } from '../lib/prisma.js';
 import type { AuthUser } from './types.js';
 import type { Role } from '@cadence/shared';
 
+/**
+ * Authentication middleware.
+ *
+ * These are declared to return `void`, with the async work in a promise chain
+ * ending in `.catch(next)`. Express 4 does not await middleware, so handing it
+ * an `async` function means a rejection becomes an unhandled promise rejection
+ * instead of a 500 — the shape below makes that impossible.
+ */
+
 async function loadUser(token: string): Promise<AuthUser> {
   const payload = verifyAccessToken(token);
   // The token is trusted for identity but not for state: a user deactivated
@@ -27,39 +36,45 @@ async function loadUser(token: string): Promise<AuthUser> {
 }
 
 /** Requires a valid access cookie; 401 otherwise. */
-export async function authenticate(
-  req: Request,
-  _res: Response,
-  next: NextFunction,
-): Promise<void> {
-  try {
-    const token = req.cookies?.[ACCESS_COOKIE] as string | undefined;
-    if (!token) throw new UnauthenticatedError();
-    req.user = await loadUser(token);
-    next();
-  } catch (error) {
-    next(error);
+export function authenticate(req: Request, _res: Response, next: NextFunction): void {
+  const token = req.cookies?.[ACCESS_COOKIE] as string | undefined;
+  if (!token) {
+    next(new UnauthenticatedError());
+    return;
   }
+
+  loadUser(token)
+    .then((user) => {
+      req.user = user;
+      next();
+    })
+    .catch(next);
 }
 
 /**
- * Attaches the user when a valid cookie is present, but never rejects.  The
+ * Attaches the user when a valid cookie is present, but never rejects. The
  * catalog uses this: signed-out visitors get the public view, signed-in ones
  * additionally get their enrollment state.
  */
-export async function optionalAuthenticate(
+export function optionalAuthenticate(
   req: Request,
   _res: Response,
   next: NextFunction,
-): Promise<void> {
+): void {
   const token = req.cookies?.[ACCESS_COOKIE] as string | undefined;
-  if (!token) return next();
-  try {
-    req.user = await loadUser(token);
-  } catch {
-    // An expired or tampered cookie is simply treated as "not signed in".
+  if (!token) {
+    next();
+    return;
   }
-  next();
+
+  loadUser(token)
+    .then((user) => {
+      req.user = user;
+    })
+    .catch(() => {
+      // An expired or tampered cookie is simply treated as "not signed in".
+    })
+    .finally(() => next());
 }
 
 export function requireRole(...roles: Role[]) {

@@ -1,9 +1,6 @@
 import type {
   CourseEnrollmentState,
-  CourseStatus,
   CourseSummary,
-  Difficulty,
-  EnrollmentStatus,
   LessonStatus,
   LessonSummary,
 } from '@cadence/shared';
@@ -38,7 +35,7 @@ export function buildEnrollmentState(
   if (!enrollment) return null;
   return {
     isEnrolled: true,
-    status: enrollment.status as EnrollmentStatus,
+    status: enrollment.status,
     progressPercentage: courseProgressPercentage(completedLessons, totalLessons),
     completedLessons,
     lastLessonId: enrollment.lastLessonId,
@@ -62,8 +59,8 @@ export function buildCourseSummary(params: {
     description: course.description,
     category: course.category,
     thumbnailUrl: course.thumbnailUrl,
-    difficulty: course.difficulty as Difficulty,
-    status: course.status as CourseStatus,
+    difficulty: course.difficulty,
+    status: course.status,
     lessonCount,
     estimatedDuration: totalDuration,
     publishedAt: course.publishedAt?.toISOString() ?? null,

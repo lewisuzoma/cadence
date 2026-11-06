@@ -52,7 +52,7 @@ describe('authorization', () => {
 
     for (const [method, path, payload] of writes) {
       const response = await withCsrf(
-        (agent[method as 'post'] as (url: string) => ReturnType<typeof agent.post>)(path),
+        (agent[method as 'post'])(path),
       ).send(payload);
       // 403 from the role guard, never 400 from validation: authorization is
       // decided before the body is even considered.

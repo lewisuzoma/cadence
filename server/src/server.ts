@@ -28,9 +28,10 @@ async function main(): Promise<void> {
   // Graceful shutdown: stop accepting connections, drain, release the pool.
   const shutdown = (signal: string) => {
     logger.info({ signal }, 'Shutting down');
-    server.close(async () => {
-      await disconnectPrisma();
-      process.exit(0);
+    server.close(() => {
+      // server.close expects a void callback, so the promise is chained
+      // rather than awaited: an async callback would float the rejection.
+      void disconnectPrisma().finally(() => process.exit(0));
     });
     // Do not hang forever on a stuck connection.
     setTimeout(() => process.exit(1), 10_000).unref();

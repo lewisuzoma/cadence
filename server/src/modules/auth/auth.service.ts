@@ -28,7 +28,7 @@ function toPublicUser(row: PublicUserRow): User {
     firstName: row.firstName,
     lastName: row.lastName,
     email: row.email,
-    role: row.role as Role,
+    role: row.role,
     isActive: row.isActive,
     createdAt: row.createdAt.toISOString(),
   };
@@ -65,7 +65,7 @@ export const authService = {
       passwordHash: await hashPassword(input.password),
     });
 
-    const tokens = await issueTokens(user.id, user.role as Role);
+    const tokens = await issueTokens(user.id, user.role);
     return { user: toPublicUser(user), tokens };
   },
 
@@ -85,7 +85,7 @@ export const authService = {
     // someone guessing emails.
     if (!user.isActive) throw new AccountInactiveError();
 
-    const tokens = await issueTokens(user.id, user.role as Role);
+    const tokens = await issueTokens(user.id, user.role);
     return {
       user: toPublicUser(user),
       tokens,
@@ -135,7 +135,7 @@ export const authService = {
     return {
       user: toPublicUser(user),
       tokens: {
-        accessToken: signAccessToken(user.id, user.role as Role),
+        accessToken: signAccessToken(user.id, user.role),
         refreshToken: nextRefresh,
       },
     };
@@ -182,7 +182,7 @@ export const authService = {
     await authRepository.updatePasswordHash(userId, await hashPassword(input.password));
     await authRepository.revokeAllForUser(userId);
 
-    const tokens = await issueTokens(user.id, user.role as Role);
+    const tokens = await issueTokens(user.id, user.role);
     return { user: toPublicUser(user), tokens };
   },
 };

@@ -34,7 +34,7 @@ describe('auth', () => {
       // The hash must never travel to the client.
       expect(response.body.data.user).not.toHaveProperty('passwordHash');
 
-      const cookies = (response.headers['set-cookie'] as string[]) ?? [];
+      const cookies = (response.headers['set-cookie'] as unknown as string[]) ?? [];
       expect(cookies.some((c) => c.startsWith('cadence_access=') && c.includes('HttpOnly'))).toBe(
         true,
       );
@@ -180,7 +180,7 @@ describe('auth', () => {
         .post('/api/v1/auth/login')
         .send({ email: 'learner@test.dev', password: TEST_PASSWORD });
 
-      const stolen = ((login.headers['set-cookie'] as string[]) ?? [])
+      const stolen = ((login.headers['set-cookie'] as unknown as string[]) ?? [])
         .find((cookie) => cookie.startsWith(`${REFRESH_COOKIE}=`))!
         .split('=')[1]!
         .split(';')[0]!;

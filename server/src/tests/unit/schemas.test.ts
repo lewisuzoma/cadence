@@ -55,7 +55,7 @@ describe('registerSchema', () => {
   });
 
   it('has no role field at all, so a role cannot be injected', () => {
-    const parsed = registerSchema.parse({ ...valid, role: 'ADMIN' } as never);
+    const parsed = registerSchema.parse({ ...valid, role: 'ADMIN' });
     expect('role' in parsed).toBe(false);
   });
 });
@@ -124,7 +124,7 @@ describe('saveProgressSchema', () => {
   });
 
   it('has no completion field: the server decides what a position means', () => {
-    const parsed = saveProgressSchema.parse({ positionSeconds: 10, isCompleted: true } as never);
+    const parsed = saveProgressSchema.parse({ positionSeconds: 10, isCompleted: true });
     expect('isCompleted' in parsed).toBe(false);
   });
 });

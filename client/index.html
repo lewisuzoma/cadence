@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#2F4BFF" />
+    <meta
+      name="description"
+      content="Cadence - an online learning platform. Every lesson remembers your last position."
+    />
+    <title>Cadence</title>
+
+    <!--
+      Only the body font is preloaded. Preloading all three would compete with
+      the API request on first paint, and headings tolerate a swap better than
+      body copy does. The files are self-hosted and fingerprinted by Vite; no
+      request goes to a font CDN.
+    -->
+    <link
+      rel="preload"
+      href="/src/assets/fonts/inter/inter-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      Cadence needs JavaScript to run. Please enable it, or use a browser that supports it.
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

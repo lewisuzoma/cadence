@@ -12,7 +12,9 @@ import type { ApiFailure, ApiSuccess, ErrorCode, PaginationMeta } from '@cadence
  *    that fails, clear auth state and bounce to /login?next=…
  */
 
-export const API_BASE: string = import.meta.env.VITE_API_URL ?? '/api/v1';
+// Vite types `import.meta.env` loosely, so the value is narrowed here rather
+// than letting an `any` leak into every request URL.
+export const API_BASE: string = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api/v1';
 
 export class ApiError extends Error {
   readonly status: number;

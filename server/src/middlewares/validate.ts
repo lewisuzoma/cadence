@@ -28,7 +28,7 @@ export function validate(schemas: Schemas) {
     try {
       if (schemas.params) req.params = schemas.params.parse(req.params) as typeof req.params;
       if (schemas.query) req.query = schemas.query.parse(req.query) as typeof req.query;
-      if (schemas.body) req.body = schemas.body.parse(req.body);
+      if (schemas.body) req.body = schemas.body.parse(req.body) as unknown;
       next();
     } catch (error) {
       if (error instanceof ZodError) {
@@ -44,4 +44,4 @@ export function validate(schemas: Schemas) {
 export const body = <T extends ZodTypeAny>(req: Request, _schema: T): z.infer<T> =>
   req.body as z.infer<T>;
 export const query = <T extends ZodTypeAny>(req: Request, _schema: T): z.infer<T> =>
-  req.query as unknown as z.infer<T>;
+  req.query;

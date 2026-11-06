@@ -4,6 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import type { FieldValues, Path, UseFormSetError } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type {
@@ -105,18 +106,22 @@ export function useChangePassword() {
 /**
  * Maps a server 400 back onto the form that produced it, so a validation
  * failure the browser could not catch still lands under the right input.
+ *
+ * Generic over the form's values so each caller keeps its own field names;
+ * the cast is needed because the server's keys are strings at runtime and
+ * cannot be proven to be paths of `T` at compile time.
  */
-export function applyFieldErrors(
+export function applyFieldErrors<T extends FieldValues>(
   error: unknown,
-  setError: (field: string, error: { type: string; message: string }) => void,
-  fallbackField?: string,
+  setError: UseFormSetError<T>,
+  fallbackField?: Path<T>,
 ): string | null {
   if (!(error instanceof ApiError)) return 'Something went wrong. Please try again.';
 
   if (error.fieldErrors) {
     for (const [field, messages] of Object.entries(error.fieldErrors)) {
       const message = messages[0];
-      if (message) setError(field, { type: 'server', message });
+      if (message) setError(field as Path<T>, { type: 'server', message });
     }
     return null;
   }
