@@ -36,8 +36,9 @@ function toActivityItem(row: ActivityRow, includeUser: boolean): ActivityItem {
 
 export const dashboardService = {
   async learner(userId: string): Promise<LearnerDashboard> {
-    const [stats, continueRow, enrollments, activity] = await Promise.all([
+    const [stats, summary, continueRow, enrollments, activity] = await Promise.all([
       dashboardRepository.learnerStats(userId),
+      dashboardRepository.learnerActivitySummary(userId),
       dashboardRepository.continueLearning(userId),
       enrollmentService.listMine(userId, { page: 1, pageSize: 12 }),
       dashboardRepository.queryActivity({ userId, limit: 8, offset: 0 }),
@@ -73,6 +74,8 @@ export const dashboardService = {
           stats.totalLessons,
         ),
         watchedSeconds: stats.watchedSeconds,
+        streakDays: summary.streakDays,
+        lessonsThisWeek: summary.lessonsThisWeek,
       },
       continueLearning,
       courses: enrollments.items,

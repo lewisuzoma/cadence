@@ -12,7 +12,7 @@ the whole stack runs from one command with Docker Compose.
 | **Client** | React 18 · TypeScript (strict) · Vite · React Router · TanStack Query v5 · Tailwind + Radix (shadcn-style primitives) |
 | **Server** | Node 20 · TypeScript · Express · Zod · Prisma · PostgreSQL 16 |
 | **Shared** | One Zod schema set used for API validation, TypeScript types, OpenAPI and client forms |
-| **Tests** | 210 passing — 152 server (against a real Postgres) + 58 client (jsdom + MSW) |
+| **Tests** | 213 passing — 154 server (against a real Postgres) + 59 client (jsdom + MSW) |
 
 ---
 
@@ -102,9 +102,9 @@ runs the client suite, and exits non-zero if either fails.
 
 ```
 test-server-1  |  Test Files  10 passed (10)
-test-server-1  |       Tests  152 passed (152)
+test-server-1  |       Tests  154 passed (154)
 test-client-1  |  Test Files  8 passed (8)
-test-client-1  |       Tests  58 passed (58)
+test-client-1  |       Tests  59 passed (59)
 
 ✓ server and client suites passed inside Compose
 ```
@@ -321,5 +321,8 @@ auth design, the progress-tracking approach and the trade-offs taken.
   window function or a maintained column.
 - **Single-region, single-instance assumptions.** Rate limiting is in-memory,
   so it is per-process; more than one API replica would need a shared store.
-- **The design-fidelity check was numeric, not visual** — see the note at the
-  top of `docs/design-notes.md`.
+- **The design-fidelity check is not a pixel diff.** Tokens, structure, copy
+  and per-screen composition were checked against the rendered artifact
+  pages, but the running app has not been screenshot-compared against them:
+  that needs browser automation, which this environment does not have. See
+  the end of `docs/design-notes.md`.

@@ -164,6 +164,56 @@ export const dashboardRepository = {
     };
   },
 
+  /**
+   * The learner's current streak, in consecutive days up to today, and how
+   * many lessons they finished in the last seven days.
+   *
+   * Both are derived from `lesson_progress` rather than stored, so neither can
+   * be stale. The streak counts distinct local days on which the learner
+   * touched a lesson, walking back from today (or from yesterday, so an
+   * unfinished today does not read as a broken streak).
+   *
+   * The artifact's app home shows "4-day streak · 2h 05m this week". The
+   * weekly *time* is not derivable from this schema — `maxWatchedSeconds` is
+   * cumulative per lesson, not per day — so the second figure is a lesson
+   * count instead of an invented duration. Recorded in docs/design-notes.md.
+   */
+  async learnerActivitySummary(
+    userId: string,
+  ): Promise<{ streakDays: number; lessonsThisWeek: number }> {
+    const [days, completedThisWeek] = await Promise.all([
+      prisma.$queryRaw<{ day: Date }[]>`
+        SELECT DISTINCT DATE_TRUNC('day', p."updatedAt") AS day
+        FROM "lesson_progress" p
+        WHERE p."userId" = ${userId}::uuid
+          AND p."updatedAt" > NOW() - INTERVAL '60 days'
+        ORDER BY day DESC
+      `,
+      prisma.lessonProgress.count({
+        where: {
+          userId,
+          isCompleted: true,
+          completedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+        },
+      }),
+    ]);
+
+    const seen = new Set(days.map((row) => row.day.toISOString().slice(0, 10)));
+    const dayKey = (offset: number) =>
+      new Date(Date.now() - offset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    // Start at today if there was activity, else yesterday; a streak should
+    // not be reported as broken before the day is over.
+    let offset = seen.has(dayKey(0)) ? 0 : 1;
+    let streakDays = 0;
+    while (seen.has(dayKey(offset))) {
+      streakDays++;
+      offset++;
+    }
+
+    return { streakDays, lessonsThisWeek: completedThisWeek };
+  },
+
   /** Where the learner left off: the most recently touched enrollment. */
   async continueLearning(userId: string) {
     const enrollment = await prisma.enrollment.findFirst({

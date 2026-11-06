@@ -138,6 +138,8 @@ export const learnerDashboard: LearnerDashboard = {
     totalLessons: 38,
     overallProgressPercentage: 47,
     watchedSeconds: 22320,
+    streakDays: 4,
+    lessonsThisWeek: 3,
   },
   continueLearning: {
     courseId: courseSummary.id,

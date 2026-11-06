@@ -8,7 +8,9 @@ import { renderWithRouter } from '@/test/render';
 
 /**
  * CourseCard is the most reused component in the app, so these tests pin down
- * every field the design requires it to show, and each enrollment state's CTA.
+ * the composition the artifact specifies: category chip over the media,
+ * duration pill bottom-right, a meta line paired with a status pill, a
+ * progress track that is always present, and exactly one action.
  */
 describe('CourseCard', () => {
   it('renders every field the design specifies', () => {
@@ -16,32 +18,26 @@ describe('CourseCard', () => {
 
     expect(screen.getByRole('heading', { name: courseSummary.title })).toBeInTheDocument();
     expect(screen.getByText(/Build a typed Node.js API/)).toBeInTheDocument();
+    // Category sits on the media as a chip.
     expect(screen.getByText('Engineering')).toBeInTheDocument();
-    expect(screen.getByText('Intermediate')).toBeInTheDocument();
-    // 15600 seconds formatted the way the catalog shows it.
+    // 15600 seconds, in the duration pill.
     expect(screen.getByText('4h 20m')).toBeInTheDocument();
-    expect(screen.getByText(/12 lessons/)).toBeInTheDocument();
+    // Lesson count and level share one meta line.
+    expect(screen.getByText('12 lessons · Intermediate')).toBeInTheDocument();
   });
 
-  it('shows Not started with no progress bar when not enrolled', () => {
+  it('shows Not started and an empty track when not enrolled', () => {
     renderWithRouter(<CourseCard course={courseSummary} />);
 
     expect(screen.getByText('Not started')).toBeInTheDocument();
-    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Enroll — free/ })).toBeInTheDocument();
   });
 
-  it('shows progress and a Resume action when in progress', () => {
+  it('shows the percentage in the status pill when in progress', () => {
     renderWithRouter(<CourseCard course={enrolledCourse} />);
 
-    expect(screen.getByText('In progress')).toBeInTheDocument();
-    expect(screen.getByText('58%')).toBeInTheDocument();
-
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute('aria-valuenow', '58');
-    // The accessible name says what is progressing, not just a number.
-    expect(bar).toHaveAccessibleName(`${enrolledCourse.title} progress`);
-
+    // The artifact writes this as one pill: "58% · In progress".
+    expect(screen.getByText('58% · In progress')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Resume/ })).toBeInTheDocument();
   });
 
@@ -59,8 +55,8 @@ describe('CourseCard', () => {
     renderWithRouter(<CourseCard course={completed} />);
 
     expect(screen.getByText('Completed')).toBeInTheDocument();
-    expect(screen.getByText('100%')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Review course/ })).toBeInTheDocument();
+    expect(screen.queryByText(/In progress/)).not.toBeInTheDocument();
   });
 
   it('links to the course by slug', () => {
@@ -84,5 +80,14 @@ describe('CourseCard', () => {
     const image = document.querySelector('img');
     expect(image).toHaveAttribute('alt', '');
     expect(image).toHaveAttribute('loading', 'lazy');
+  });
+
+  it('offers exactly one action, so the card has one decision', () => {
+    renderWithRouter(<CourseCard course={enrolledCourse} />);
+    // Principle 1 from the artifact: "One card, one decision."
+    const actions = screen
+      .getAllByRole('link')
+      .filter((link) => /Resume|Enroll|Review/.test(link.textContent ?? ''));
+    expect(actions).toHaveLength(1);
   });
 });

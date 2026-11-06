@@ -83,6 +83,13 @@ export default {
           DEFAULT: 'hsl(var(--night))',
           foreground: 'hsl(var(--night-foreground))',
           muted: 'hsl(var(--night-muted))',
+          /** Amber scrubber fill, and the track behind it. */
+          accent: 'hsl(var(--video-accent))',
+          track: 'hsl(var(--video-track))',
+        },
+        avatar: {
+          DEFAULT: 'hsl(var(--avatar))',
+          foreground: 'hsl(var(--avatar-foreground))',
         },
       },
       fontFamily: {

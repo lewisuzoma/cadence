@@ -63,6 +63,41 @@ describe('dashboards', () => {
       expect(courses).toHaveLength(2);
     });
 
+    it('derives the streak and the weekly count from real activity', async () => {
+      const adminId = (await createUser({ email: 'admin@test.dev', role: 'ADMIN' })).id;
+      const { course, lessons } = await createCourse({
+        adminId,
+        lessonCount: 3,
+        durationSeconds: 100,
+      });
+      await createUser({ email: 'learner@test.dev' });
+      const session = await loginAs('learner@test.dev');
+      await session.withCsrf(session.agent.post(`/api/v1/courses/${course.id}/enroll`));
+
+      // Two lessons finished today.
+      for (const lesson of lessons.slice(0, 2)) {
+        await session
+          .withCsrf(session.agent.post(`/api/v1/lessons/${lesson.id}/complete`))
+          .send({ positionSeconds: 100 });
+      }
+
+      const response = await session.agent.get('/api/v1/dashboard/learner');
+      expect(response.status).toBe(200);
+      // Activity today is a one-day streak, and both completions are inside
+      // the seven-day window.
+      expect(response.body.data.stats.streakDays).toBe(1);
+      expect(response.body.data.stats.lessonsThisWeek).toBe(2);
+    });
+
+    it('reports no streak for a learner who has watched nothing', async () => {
+      await createUser({ email: 'quiet@test.dev' });
+      const session = await loginAs('quiet@test.dev');
+
+      const response = await session.agent.get('/api/v1/dashboard/learner');
+      expect(response.body.data.stats.streakDays).toBe(0);
+      expect(response.body.data.stats.lessonsThisWeek).toBe(0);
+    });
+
     it('is all zeroes with an empty state for a new learner', async () => {
       await createUser({ email: 'new@test.dev' });
       const session = await loginAs('new@test.dev');

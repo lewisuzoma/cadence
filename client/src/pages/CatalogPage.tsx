@@ -23,7 +23,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { ContinueLearningCard } from '@/components/dashboard/ContinueLearningCard';
 import { useCourseCategories, useCourses, usePrefetchCourse } from '@/features/courses/courses.queries';
+import { useLearnerDashboard } from '@/features/dashboard/dashboard.queries';
 import { cn, pluralize } from '@/lib/utils';
 
 /**
@@ -89,6 +91,8 @@ export function CatalogPage() {
   const { data, isPending, isError, refetch, isPlaceholderData } = useCourses(query);
   const { data: categories = [] } = useCourseCategories();
   const prefetch = usePrefetchCourse();
+  // The artifact puts the continue banner at the top of the catalog too.
+  const { data: dashboard } = useLearnerDashboard();
 
   const courses = data?.items ?? [];
   const meta = data?.meta;
@@ -96,6 +100,10 @@ export function CatalogPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      {dashboard?.continueLearning ? (
+        <ContinueLearningCard item={dashboard.continueLearning} />
+      ) : null}
+
       <PageHeader
         title="Course catalog"
         description={
@@ -253,7 +261,9 @@ function CategoryChip({
   return (
     <Button
       type="button"
-      variant={active ? 'default' : 'secondary'}
+      // Ink when selected: the artifact reserves cobalt for the one
+      // primary action on a screen, so selection reads as state instead.
+      variant={active ? 'ink' : 'secondary'}
       size="sm"
       onClick={onClick}
       aria-pressed={active}

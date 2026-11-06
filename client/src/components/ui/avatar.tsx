@@ -33,7 +33,8 @@ const AvatarFallback = React.forwardRef<
   <AvatarPrimitive.Fallback
     ref={ref}
     className={cn(
-      'flex size-full items-center justify-center rounded-pill bg-primary-tint text-caption font-semibold text-primary-hover',
+      // Peach with Ink initials, as every avatar in the artifacts is.
+      'flex size-full items-center justify-center rounded-pill bg-avatar text-caption font-semibold text-avatar-foreground',
       className,
     )}
     {...props}

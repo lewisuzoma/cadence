@@ -45,6 +45,10 @@ export const learnerDashboardSchema = z.object({
     /** Completed lessons ÷ lessons across every enrolled course. */
     overallProgressPercentage: z.number().int().min(0).max(100),
     watchedSeconds: z.number().int().min(0),
+    /** Consecutive days with activity, derived from lesson_progress. */
+    streakDays: z.number().int().min(0),
+    /** Lessons finished in the last seven days. */
+    lessonsThisWeek: z.number().int().min(0),
   }),
   continueLearning: continueLearningSchema.nullable(),
   courses: z.array(enrollmentWithCourseSchema),

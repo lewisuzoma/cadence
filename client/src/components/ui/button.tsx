@@ -17,6 +17,13 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: 'bg-primary text-primary-foreground hover:bg-primary-hover',
+        /**
+         * Ink-filled. The artifact uses this, not cobalt, for a *selected*
+         * control — the active catalog category chip and the active segmented
+         * tab — so that selection reads as state while cobalt stays reserved
+         * for the one primary action on a screen.
+         */
+        ink: 'bg-foreground text-background hover:bg-foreground/90',
         secondary: 'bg-card text-foreground border border-border hover:bg-muted',
         outline: 'border border-border bg-transparent hover:bg-muted',
         ghost: 'hover:bg-muted hover:text-foreground',

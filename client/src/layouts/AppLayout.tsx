@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet } from 'react-router-dom';
 import {
   Activity,
   BookOpen,
@@ -12,6 +12,8 @@ import {
   Users,
 } from 'lucide-react';
 import { initials, fullName } from '@cadence/shared';
+import { Wordmark } from '@/components/common/Brand';
+import { MobileTabBar, MobileTabBarSpacer } from '@/components/layout/MobileTabBar';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -27,14 +29,15 @@ import { useLogout, useMe } from '@/features/auth/auth.queries';
 import { cn } from '@/lib/utils';
 
 /**
- * The learner shell: a 68px top bar over the page, as the artifact shows
- * (wordmark, primary nav, avatar menu). On mobile the nav collapses into a
- * Sheet drawer.
+ * The learner shell.
  *
- * The admin area gets its own shell with a fixed 246px sidebar — see
- * AdminLayout.
+ * Desktop (artifact pages 3–7): a 68px top bar with the mark, pill nav where
+ * the active item sits on a cobalt tint, and the avatar menu on the right.
+ *
+ * Phone (artifact pages 9–10, the "app" screens): the same top bar minus the
+ * nav, with a fixed bottom tab bar instead. No hamburger — the tab bar is the
+ * navigation, which is what makes those screens read as an app.
  */
-
 const LEARNER_NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/courses', label: 'Catalog', icon: BookOpen },
@@ -43,7 +46,7 @@ const LEARNER_NAV = [
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
   return cn(
-    'flex min-h-11 items-center gap-2 rounded-md px-3 text-small font-semibold transition-colors',
+    'flex min-h-11 items-center gap-2 rounded-pill px-3.5 text-small font-semibold transition-colors',
     isActive
       ? 'bg-primary-tint text-primary-hover'
       : 'text-secondary-foreground hover:bg-muted hover:text-foreground',
@@ -95,11 +98,7 @@ export function UserMenu() {
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          destructive
-          onClick={() => logout.mutate()}
-          aria-label="Sign out"
-        >
+        <DropdownMenuItem destructive onClick={() => logout.mutate()} aria-label="Sign out">
           <LogOut aria-hidden="true" />
           Sign out
         </DropdownMenuItem>
@@ -108,29 +107,8 @@ export function UserMenu() {
   );
 }
 
-export function Wordmark({ to = '/dashboard' }: { to?: string }) {
-  return (
-    <Link to={to} className="flex items-center gap-2.5 rounded-md">
-      {/* The artifact's mark: a cobalt square with the C, then the wordmark. */}
-      <span
-        className="flex size-8 shrink-0 items-center justify-center rounded-sm bg-primary font-heading text-small font-bold text-primary-foreground"
-        aria-hidden="true"
-      >
-        C
-      </span>
-      <span className="font-heading text-heading-sm tracking-tight">Cadence</span>
-    </Link>
-  );
-}
-
 export function AppLayout() {
   const { data: user } = useMe();
-  const location = useLocation();
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  // Close the drawer on navigation, so a tap does not leave it open behind
-  // the new page.
-  const closeMenu = () => setMenuOpen(false);
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
@@ -140,32 +118,6 @@ export function AppLayout() {
 
       <header className="sticky top-0 z-30 h-17 border-b border-border bg-card/95 backdrop-blur">
         <div className="container flex h-17 items-center gap-4">
-          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-            <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="md:hidden" aria-label="Open menu">
-                <Menu />
-              </Button>
-            </SheetTrigger>
-            <SheetContent side="left">
-              <SheetTitle className="sr-only">Navigation</SheetTitle>
-              <Wordmark to={user?.role === 'ADMIN' ? '/admin' : '/dashboard'} />
-              <nav aria-label="Main" className="mt-4 flex flex-col gap-1">
-                {LEARNER_NAV.map((item) => (
-                  <NavLink key={item.to} to={item.to} className={navLinkClass} onClick={closeMenu}>
-                    <item.icon className="size-4" aria-hidden="true" />
-                    {item.label}
-                  </NavLink>
-                ))}
-                {user?.role === 'ADMIN' ? (
-                  <NavLink to="/admin" className={navLinkClass} onClick={closeMenu}>
-                    <ShieldCheck className="size-4" aria-hidden="true" />
-                    Admin
-                  </NavLink>
-                ) : null}
-              </nav>
-            </SheetContent>
-          </Sheet>
-
           <Wordmark to={user?.role === 'ADMIN' ? '/admin' : '/dashboard'} />
 
           <nav aria-label="Main" className="ml-4 hidden items-center gap-1 md:flex">
@@ -187,11 +139,11 @@ export function AppLayout() {
         </div>
       </header>
 
-      <main id="main" className="container flex-1 py-8 lg:py-12" key={location.pathname}>
+      <main id="main" className="container flex-1 py-6 lg:py-12">
         <Outlet />
       </main>
 
-      <footer className="border-t border-border py-6">
+      <footer className="border-t border-border py-6 max-md:hidden">
         <div className="container flex flex-wrap items-center justify-between gap-2 text-caption text-muted-foreground">
           <p>Cadence — a learning platform.</p>
           <p>
@@ -201,6 +153,9 @@ export function AppLayout() {
           </p>
         </div>
       </footer>
+
+      <MobileTabBarSpacer />
+      <MobileTabBar />
     </div>
   );
 }
@@ -213,9 +168,10 @@ const ADMIN_NAV = [
 ];
 
 /**
- * The admin shell. The artifact gives it a fixed 246px sidebar with the
- * ADMIN chip, a nav list, and "View learner site" plus "Sign out" pinned to
- * the bottom. Below the lg breakpoint it becomes the same drawer pattern.
+ * The admin shell: a fixed 246px sidebar (measured from artifact pages 8–9)
+ * with the ADMIN chip, the nav list, and "View learner site" plus "Sign out"
+ * pinned to the bottom. Below `lg` it becomes a drawer — admin keeps the
+ * hamburger because it has no bottom-tab equivalent in the artifacts.
  */
 export function AdminLayout() {
   const { data: user } = useMe();
@@ -261,14 +217,8 @@ export function AdminLayout() {
         Skip to main content
       </a>
 
-      {/* Fixed 246px sidebar, measured from the artifact. */}
       <aside className="sticky top-0 hidden h-dvh w-[246px] shrink-0 flex-col gap-4 border-r border-border bg-card p-4 lg:flex">
-        <div className="flex items-center gap-2">
-          <Wordmark to="/admin" />
-          <span className="rounded-pill bg-primary-tint px-2 py-0.5 text-overline uppercase text-primary-hover">
-            Admin
-          </span>
-        </div>
+        <Wordmark to="/admin" showAdminChip />
         {nav}
         {footer}
       </aside>
@@ -284,7 +234,7 @@ export function AdminLayout() {
               </SheetTrigger>
               <SheetContent side="left" className="gap-4">
                 <SheetTitle className="sr-only">Admin navigation</SheetTitle>
-                <Wordmark to="/admin" />
+                <Wordmark to="/admin" showAdminChip />
                 {nav}
                 {footer}
               </SheetContent>

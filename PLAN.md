@@ -66,9 +66,11 @@ Status: `[x]` done & verified · `[~]` implemented, not fully verified · `[ ]` 
 - [~] Responsive 360/768/1280 and keyboard pass — built to the breakpoints and
       keyboard paths, but not verified in a real browser (no browser automation
       available in this environment)
-- [~] Design fidelity — verified numerically against tokens, geometry, type
-      hierarchy and copy extracted from the PDFs, not by raster comparison
-      (no PDF rasteriser available; see the note in `docs/design-notes.md`)
+- [x] Artifacts rasterised and compared: player accent, avatar, brand mark,
+      selection colour, card composition and thumbnail art all corrected
+- [x] Mobile artifact pages 9–10 (the "app" screens) built as responsive web
+- [~] Pixel-level screenshot diff of the running app — needs browser
+      automation, unavailable here (see the end of `docs/design-notes.md`)
 
 ## Phase 8 — Docs + delivery
 - [x] `README.md`: Docker quick start, dev mode, tests, reset, troubleshooting,
@@ -80,8 +82,6 @@ Status: `[x]` done & verified · `[~]` implemented, not fully verified · `[ ]` 
 - [x] Final report
 
 ## Not implemented (deliberate, recorded)
-- Mobile artifact pages 9–10 — native **app** screens; the deliverable is a
-  responsive web SPA
 - Artifact elements with no data model behind them: streaks, weekly goal,
   recommendations, instructor profiles, trailers, transcripts, drop-off
   analytics, trend deltas, "keep me signed in", forgot password. Each is listed

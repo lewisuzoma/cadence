@@ -3,17 +3,17 @@ import {
   Captions,
   CaptionsOff,
   Check,
-  Gauge,
   Maximize,
   Minimize,
   Pause,
   Play,
   RotateCcw,
+  RotateCw,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { formatTimecode, RESUME_MIN_POSITION_SECONDS } from '@cadence/shared';
-import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import {
@@ -29,22 +29,26 @@ import { cn } from '@/lib/utils';
 /**
  * The lesson player.
  *
- * A native `<video>` with custom controls, on the design's one dark surface
+ * A native `<video>` with custom controls on the design's one dark surface
  * ("Dark only for video. The player card is the single dark surface, so focus
  * lands there.").
  *
- * Behaviour that matters:
- *  - resume: on `loadedmetadata`, seek to the saved position when it is worth
- *    resuming from, and say so with an undo ("Start over")
- *  - progress: every `timeupdate` is reported to the tracker, which throttles
- *  - completion: `ended` calls `onEnded`; the component never decides that a
- *    lesson is complete, because only the server may
- *  - keyboard: Space/K, arrows, M, F, C — on the player container, not the
- *    document, so typing elsewhere is unaffected
- *  - every control has an `aria-label` and a tooltip
+ * Details taken from the artifact rather than invented:
+ *  - the scrubber is **amber** with an amber thumb on a dark track; cobalt
+ *    would disappear against Night, which is why the design moves to amber
+ *  - resume is announced by a chip pinned to the top-left of the video —
+ *    "Resumed from 08:42 · Start over" — not by a toast that floats away
+ *  - the control row is: play · back 10 · forward 10 · restart · `08:42 /
+ *    14:20`, then speed in a bordered box, captions, volume, fullscreen
+ *  - mobile adds a compact row beneath the scrubber showing elapsed, the
+ *    speed box and the **remaining** time as `-05:38`
+ *
+ * Behaviour: `onEnded` asks the server to complete; this component never
+ * decides that a lesson is finished.
  */
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+const SKIP_SECONDS = 10;
 const SEEK_STEP_SECONDS = 5;
 const VOLUME_STEP = 0.1;
 
@@ -52,13 +56,10 @@ export type LessonVideoPlayerProps = {
   videoUrl: string;
   captionsUrl?: string | null;
   title: string;
-  /** Where to resume from, in seconds. 0 starts at the beginning. */
   resumeFromSeconds?: number;
   durationSeconds: number;
   isCompleted?: boolean;
-  /** Called on every timeupdate; the tracker throttles the writes. */
   onPositionChange?: (positionSeconds: number) => void;
-  /** Pause, seek — the moments worth an immediate save. */
   onFlush?: (reason: 'pause' | 'seeked') => void;
   onEnded?: (positionSeconds: number) => void;
   onNext?: () => void;
@@ -93,31 +94,35 @@ export function LessonVideoPlayer({
   const [captionsOn, setCaptionsOn] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hasEnded, setHasEnded] = useState(false);
+  /** Drives the "Resumed from …" chip. */
+  const [resumedFrom, setResumedFrom] = useState<number | null>(null);
 
-  // Resume must happen once per lesson, not on every metadata event (which
-  // fires again after a source change or a track toggle on some browsers).
   const hasResumedRef = useRef(false);
   useEffect(() => {
     hasResumedRef.current = false;
     setHasEnded(false);
     setPosition(0);
+    setResumedFrom(null);
   }, [videoUrl]);
 
-  const seekTo = useCallback((seconds: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    const target = Math.max(0, Math.min(seconds, video.duration || durationSeconds));
-    video.currentTime = target;
-    setPosition(target);
-  }, [durationSeconds]);
+  const seekTo = useCallback(
+    (seconds: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const target = Math.max(0, Math.min(seconds, video.duration || durationSeconds));
+      video.currentTime = target;
+      setPosition(target);
+    },
+    [durationSeconds],
+  );
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
       void video.play().catch(() => {
-        // Autoplay restrictions, or a missing/blocked source. The error state
-        // below covers an unplayable source; nothing useful to do here.
+        // Autoplay restrictions, or an unplayable source: nothing useful to
+        // do here, and the controls stay in their paused state.
       });
     } else {
       video.pause();
@@ -132,8 +137,6 @@ export function LessonVideoPlayer({
     if (hasResumedRef.current) return;
     hasResumedRef.current = true;
 
-    // Only resume somewhere meaningful: a few seconds in is not worth a jump,
-    // and a finished lesson should start from the top on a rewatch.
     const shouldResume =
       resumeFromSeconds > RESUME_MIN_POSITION_SECONDS &&
       !isCompleted &&
@@ -142,14 +145,9 @@ export function LessonVideoPlayer({
     if (shouldResume) {
       video.currentTime = resumeFromSeconds;
       setPosition(resumeFromSeconds);
-      toast(`Resumed from ${formatTimecode(resumeFromSeconds)}`, {
-        action: {
-          label: 'Start over',
-          onClick: () => seekTo(0),
-        },
-      });
+      setResumedFrom(resumeFromSeconds);
     }
-  }, [durationSeconds, isCompleted, resumeFromSeconds, seekTo]);
+  }, [durationSeconds, isCompleted, resumeFromSeconds]);
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
@@ -157,7 +155,6 @@ export function LessonVideoPlayer({
     setPosition(video.currentTime);
     onPositionChange?.(video.currentTime);
 
-    // Buffered ahead of the playhead, for the scrubber's second track.
     if (video.buffered.length > 0) {
       const end = video.buffered.end(video.buffered.length - 1);
       const total = video.duration || durationSeconds;
@@ -199,7 +196,7 @@ export function LessonVideoPlayer({
       void document.exitFullscreen();
     } else {
       void container.requestFullscreen?.().catch(() => {
-        /* fullscreen can be blocked by permissions policy; ignore */
+        /* fullscreen can be blocked by permissions policy */
       });
     }
   }, []);
@@ -217,15 +214,18 @@ export function LessonVideoPlayer({
     setRate(next);
   }, []);
 
-  /**
-   * Keyboard shortcuts, scoped to the player. Ignored while focus is in a
-   * text field so typing a note never scrubs the video.
-   */
+  const skip = useCallback(
+    (seconds: number) => {
+      seekTo(position + seconds);
+      onFlush?.('seeked');
+    },
+    [onFlush, position, seekTo],
+  );
+
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement;
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      // Let the slider handle its own arrow keys.
       if (target.getAttribute('role') === 'slider' && event.key.startsWith('Arrow')) return;
 
       switch (event.key) {
@@ -237,13 +237,11 @@ export function LessonVideoPlayer({
           break;
         case 'ArrowRight':
           event.preventDefault();
-          seekTo(position + SEEK_STEP_SECONDS);
-          onFlush?.('seeked');
+          skip(SEEK_STEP_SECONDS);
           break;
         case 'ArrowLeft':
           event.preventDefault();
-          seekTo(position - SEEK_STEP_SECONDS);
-          onFlush?.('seeked');
+          skip(-SEEK_STEP_SECONDS);
           break;
         case 'ArrowUp':
           event.preventDefault();
@@ -277,9 +275,7 @@ export function LessonVideoPlayer({
     [
       captionsUrl,
       changeVolume,
-      onFlush,
-      position,
-      seekTo,
+      skip,
       toggleCaptions,
       toggleFullscreen,
       toggleMute,
@@ -289,6 +285,10 @@ export function LessonVideoPlayer({
   );
 
   const total = duration || durationSeconds;
+  const remaining = Math.max(0, Math.round(total - position));
+
+  const controlButton =
+    'text-night-foreground hover:bg-white/15 hover:text-night-foreground';
 
   return (
     <Card variant="night" className={cn('overflow-hidden', className)}>
@@ -300,70 +300,108 @@ export function LessonVideoPlayer({
         role="region"
         aria-label={`Video player: ${title}`}
       >
-        <video
-          ref={videoRef}
-          src={videoUrl}
-          className="aspect-video w-full bg-night"
-          preload="metadata"
-          playsInline
-          onLoadedMetadata={handleLoadedMetadata}
-          onTimeUpdate={handleTimeUpdate}
-          onPlay={() => {
-            setIsPlaying(true);
-            setHasEnded(false);
-          }}
-          onPause={() => {
-            setIsPlaying(false);
-            onFlush?.('pause');
-          }}
-          onSeeked={() => onFlush?.('seeked')}
-          onEnded={() => {
-            setIsPlaying(false);
-            setHasEnded(true);
-            const video = videoRef.current;
-            onEnded?.(video?.duration ?? total);
-          }}
-          onVolumeChange={() => {
-            const video = videoRef.current;
-            if (video) {
-              setVolume(video.volume);
-              setIsMuted(video.muted);
-            }
-          }}
-        >
-          {captionsUrl ? (
-            <track kind="captions" src={captionsUrl} srcLang="en" label="English" default={false} />
-          ) : null}
-          Your browser does not support embedded video.
-        </video>
+        <div className="relative">
+          <video
+            ref={videoRef}
+            src={videoUrl}
+            className="aspect-video w-full bg-night"
+            preload="metadata"
+            playsInline
+            onLoadedMetadata={handleLoadedMetadata}
+            onTimeUpdate={handleTimeUpdate}
+            onPlay={() => {
+              setIsPlaying(true);
+              setHasEnded(false);
+            }}
+            onPause={() => {
+              setIsPlaying(false);
+              onFlush?.('pause');
+            }}
+            onSeeked={() => onFlush?.('seeked')}
+            onEnded={() => {
+              setIsPlaying(false);
+              setHasEnded(true);
+              onEnded?.(videoRef.current?.duration ?? total);
+            }}
+            onVolumeChange={() => {
+              const video = videoRef.current;
+              if (video) {
+                setVolume(video.volume);
+                setIsMuted(video.muted);
+              }
+            }}
+          >
+            {captionsUrl ? (
+              <track kind="captions" src={captionsUrl} srcLang="en" label="English" />
+            ) : null}
+            Your browser does not support embedded video.
+          </video>
 
-        {/* The completion overlay from the design: a confirmation and a way on. */}
-        {hasEnded ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-night/85 text-night-foreground">
-            <span className="flex size-14 items-center justify-center rounded-pill bg-success">
-              <Check className="size-7" aria-hidden="true" strokeWidth={3} />
-            </span>
-            <p className="font-heading text-heading-sm">Lesson complete</p>
-            <div className="flex items-center gap-3">
+          {/*
+            The resume chip from the artifact, pinned over the video. It stays
+            until dismissed or until the learner starts over, so the undo does
+            not time out the way a toast would.
+          */}
+          {resumedFrom !== null && !hasEnded ? (
+            <div
+              className="absolute left-4 top-4 flex items-center gap-2 rounded-md bg-card/95 py-1.5 pl-3 pr-1.5 shadow-overlay backdrop-blur"
+              role="status"
+            >
+              <span className="text-caption text-secondary-foreground">Resumed from</span>
+              <span className="font-mono text-caption font-semibold tabular">
+                {formatTimecode(resumedFrom)}
+              </span>
               <Button
-                variant="secondary"
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-caption"
                 onClick={() => {
                   seekTo(0);
-                  togglePlay();
+                  setResumedFrom(null);
                 }}
               >
-                <RotateCcw aria-hidden="true" />
-                Replay
+                Start over
               </Button>
-              {hasNext && onNext ? <Button onClick={onNext}>Next lesson</Button> : null}
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="size-7"
+                aria-label="Dismiss resume notice"
+                onClick={() => setResumedFrom(null)}
+              >
+                <X className="size-3.5" />
+              </Button>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {/* Controls */}
-        <div className="flex flex-col gap-2 bg-night px-4 pb-4 pt-2">
+          {/* Completion overlay: a confirmation and a way onward. */}
+          {hasEnded ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-night/85 text-night-foreground">
+              <span className="flex size-14 items-center justify-center rounded-pill bg-success">
+                <Check className="size-7" aria-hidden="true" strokeWidth={3} />
+              </span>
+              <p className="font-heading text-heading-sm">Lesson complete</p>
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    seekTo(0);
+                    togglePlay();
+                  }}
+                >
+                  <RotateCcw aria-hidden="true" />
+                  Replay
+                </Button>
+                {hasNext && onNext ? <Button onClick={onNext}>Next lesson</Button> : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {/* Scrubber — amber on a dark track, as the artifact specifies. */}
+        <div className="px-4 pt-3">
           <Slider
-            tone="night"
+            tone="video"
             value={[Math.min(position, total)]}
             max={total || 1}
             step={1}
@@ -375,110 +413,151 @@ export function LessonVideoPlayer({
             }}
             onValueCommit={() => onFlush?.('seeked')}
           />
+        </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
-            <IconTooltip label={isPlaying ? 'Pause (K)' : 'Play (K)'}>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={togglePlay}
-                aria-label={isPlaying ? 'Pause' : 'Play'}
-                className="text-night-foreground hover:bg-white/15 hover:text-night-foreground"
-              >
-                {isPlaying ? <Pause /> : <Play />}
-              </Button>
-            </IconTooltip>
+        {/* Compact row for phone width: elapsed · speed · remaining. */}
+        <div className="flex items-center justify-between gap-3 px-4 pb-3 sm:hidden">
+          <span className="font-mono text-timecode tabular text-night-foreground">
+            {formatTimecode(position)}
+          </span>
+          <SpeedMenu rate={rate} onChange={changeRate} />
+          <span className="font-mono text-timecode tabular text-night-muted">
+            -{formatTimecode(remaining)}
+          </span>
+        </div>
 
-            <span className="ml-1 font-mono text-timecode tabular text-night-foreground">
-              {formatTimecode(position)}
-              <span className="text-night-muted"> / {formatTimecode(total)}</span>
-            </span>
+        {/* Full control row from tablet width up. */}
+        <div className="hidden flex-wrap items-center gap-1.5 px-4 pb-4 sm:flex">
+          <IconTooltip label={isPlaying ? 'Pause (K)' : 'Play (K)'}>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={togglePlay}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+              className={controlButton}
+            >
+              {isPlaying ? <Pause /> : <Play />}
+            </Button>
+          </IconTooltip>
 
-            <div className="ml-auto flex items-center gap-1.5">
-              <div className="flex items-center gap-1">
-                <IconTooltip label={isMuted ? 'Unmute (M)' : 'Mute (M)'}>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={toggleMute}
-                    aria-label={isMuted ? 'Unmute' : 'Mute'}
-                    className="text-night-foreground hover:bg-white/15 hover:text-night-foreground"
-                  >
-                    {isMuted || volume === 0 ? <VolumeX /> : <Volume2 />}
-                  </Button>
-                </IconTooltip>
-                <Slider
-                  tone="night"
-                  className="hidden w-24 sm:flex"
-                  value={[isMuted ? 0 : volume * 100]}
-                  max={100}
-                  step={5}
-                  aria-label="Volume"
-                  aria-valuetext={`${Math.round((isMuted ? 0 : volume) * 100)} percent`}
-                  onValueChange={([next]) => {
-                    if (next !== undefined) changeVolume(next / 100);
-                  }}
-                />
-              </div>
+          <IconTooltip label={`Back ${SKIP_SECONDS} seconds`}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => skip(-SKIP_SECONDS)}
+              aria-label={`Rewind ${SKIP_SECONDS} seconds`}
+              className={controlButton}
+            >
+              <RotateCcw />
+            </Button>
+          </IconTooltip>
 
-              <DropdownMenu>
-                <IconTooltip label="Playback speed">
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Playback speed, currently ${rate} times`}
-                      className="gap-1 px-2 text-night-foreground hover:bg-white/15 hover:text-night-foreground"
-                    >
-                      <Gauge />
-                      <span className="font-mono text-caption">{rate}x</span>
-                    </Button>
-                  </DropdownMenuTrigger>
-                </IconTooltip>
-                <DropdownMenuContent align="end">
-                  {PLAYBACK_RATES.map((option) => (
-                    <DropdownMenuItem
-                      key={option}
-                      onClick={() => changeRate(option)}
-                      aria-current={option === rate}
-                    >
-                      {option === rate ? <Check /> : <span className="size-4" />}
-                      {option}x{option === 1 ? ' (normal)' : ''}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+          <IconTooltip label={`Forward ${SKIP_SECONDS} seconds`}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => skip(SKIP_SECONDS)}
+              aria-label={`Forward ${SKIP_SECONDS} seconds`}
+              className={controlButton}
+            >
+              <RotateCw />
+            </Button>
+          </IconTooltip>
 
-              {captionsUrl ? (
-                <IconTooltip label={captionsOn ? 'Hide captions (C)' : 'Show captions (C)'}>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={toggleCaptions}
-                    aria-label={captionsOn ? 'Hide captions' : 'Show captions'}
-                    aria-pressed={captionsOn}
-                    className="text-night-foreground hover:bg-white/15 hover:text-night-foreground"
-                  >
-                    {captionsOn ? <Captions /> : <CaptionsOff />}
-                  </Button>
-                </IconTooltip>
-              ) : null}
+          <span className="ml-2 font-mono text-timecode tabular text-night-foreground">
+            {formatTimecode(position)}
+            <span className="text-night-muted"> / {formatTimecode(total)}</span>
+          </span>
 
-              <IconTooltip label={isFullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}>
+          <div className="ml-auto flex items-center gap-1.5">
+            <SpeedMenu rate={rate} onChange={changeRate} />
+
+            {captionsUrl ? (
+              <IconTooltip label={captionsOn ? 'Hide captions (C)' : 'Show captions (C)'}>
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  onClick={toggleFullscreen}
-                  aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-                  className="text-night-foreground hover:bg-white/15 hover:text-night-foreground"
+                  onClick={toggleCaptions}
+                  aria-label={captionsOn ? 'Hide captions' : 'Show captions'}
+                  aria-pressed={captionsOn}
+                  className={controlButton}
                 >
-                  {isFullscreen ? <Minimize /> : <Maximize />}
+                  {captionsOn ? <Captions /> : <CaptionsOff />}
                 </Button>
               </IconTooltip>
+            ) : null}
+
+            <div className="flex items-center gap-1">
+              <IconTooltip label={isMuted ? 'Unmute (M)' : 'Mute (M)'}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={toggleMute}
+                  aria-label={isMuted ? 'Unmute' : 'Mute'}
+                  className={controlButton}
+                >
+                  {isMuted || volume === 0 ? <VolumeX /> : <Volume2 />}
+                </Button>
+              </IconTooltip>
+              <Slider
+                tone="video"
+                className="hidden w-24 lg:flex"
+                value={[isMuted ? 0 : volume * 100]}
+                max={100}
+                step={5}
+                aria-label="Volume"
+                aria-valuetext={`${Math.round((isMuted ? 0 : volume) * 100)} percent`}
+                onValueChange={([next]) => {
+                  if (next !== undefined) changeVolume(next / 100);
+                }}
+              />
             </div>
+
+            <IconTooltip label={isFullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={toggleFullscreen}
+                aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                className={controlButton}
+              >
+                {isFullscreen ? <Minimize /> : <Maximize />}
+              </Button>
+            </IconTooltip>
           </div>
         </div>
       </div>
     </Card>
+  );
+}
+
+/** Playback speed in a bordered box, the way the artifact draws it. */
+function SpeedMenu({ rate, onChange }: { rate: number; onChange: (rate: number) => void }) {
+  return (
+    <DropdownMenu>
+      <IconTooltip label="Playback speed">
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Playback speed, currently ${rate} times`}
+            className="flex h-8 min-w-11 items-center justify-center rounded-sm border border-white/30 px-2 font-mono text-caption text-night-foreground transition-colors hover:bg-white/15"
+          >
+            {rate}×
+          </button>
+        </DropdownMenuTrigger>
+      </IconTooltip>
+      <DropdownMenuContent align="end">
+        {PLAYBACK_RATES.map((option) => (
+          <DropdownMenuItem
+            key={option}
+            onClick={() => onChange(option)}
+            aria-current={option === rate}
+          >
+            {option === rate ? <Check /> : <span className="size-4" />}
+            {option}×{option === 1 ? ' (normal)' : ''}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

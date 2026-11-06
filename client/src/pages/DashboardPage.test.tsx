@@ -15,16 +15,22 @@ describe('DashboardPage', () => {
     renderWithRouter(<DashboardPage />, { path: '/dashboard' });
 
     expect(await screen.findByText('Enrolled courses')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument(); // enrolledCourses
-    expect(screen.getByText('18')).toBeInTheDocument(); // completedLessons
-    expect(screen.getByText('47%')).toBeInTheDocument(); // overallProgressPercentage
+    // The phone tiles and the desktop cards are both in the DOM — only CSS
+    // decides which is visible — so these values legitimately appear twice.
+    expect(screen.getAllByText('3').length).toBeGreaterThan(0); // enrolledCourses
+    expect(screen.getAllByText('18').length).toBeGreaterThan(0); // completedLessons
+    expect(screen.getAllByText('47%').length).toBeGreaterThan(0); // overall
     expect(screen.getByText('6h 12m')).toBeInTheDocument(); // 22320 watched seconds
     expect(screen.getByText('of 38 enrolled lessons')).toBeInTheDocument();
   });
 
-  it('greets the signed-in learner by name', async () => {
+  it('greets the learner, on both the desktop and the app layouts', async () => {
     renderWithRouter(<DashboardPage />, { path: '/dashboard' });
+
     expect(await screen.findByRole('heading', { name: /Welcome back, Ada\./ })).toBeInTheDocument();
+    // The phone header from mobile artifact page 10.
+    expect(screen.getByRole('heading', { name: 'Hi, Ada' })).toBeInTheDocument();
+    expect(screen.getAllByText(/4-day streak/).length).toBeGreaterThan(0);
   });
 
   it('offers to resume at the saved position', async () => {
@@ -52,6 +58,8 @@ describe('DashboardPage', () => {
               totalLessons: 0,
               overallProgressPercentage: 0,
               watchedSeconds: 0,
+              streakDays: 0,
+              lessonsThisWeek: 0,
             },
             continueLearning: null,
             courses: [],

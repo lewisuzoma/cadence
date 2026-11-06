@@ -60,6 +60,18 @@
     --night: 230 23% 6%; /* Night  #0C0E16 · video surface */
     --night-foreground: 0 0% 100%;
     --night-muted: 225 14% 70%;
+    /*
+     * The player's own accent, sampled from the artifact: the scrubber fill
+     * and its thumb are amber on the dark surface, not cobalt. Cobalt would
+     * disappear against Night, which is why the design moves to amber here.
+     */
+    --video-accent: 39 100% 56%; /* #FFB020 · scrubber fill + thumb */
+    --video-track: 0 0% 23%; /* #3B3B3B · unplayed track */
+
+    /* --- Identity ------------------------------------------------------ */
+    /* Avatars are peach with Ink initials throughout the artifact. */
+    --avatar: 22 100% 78%; /* #FFB98F */
+    --avatar-foreground: 227 23% 9%;
 
     --shadow-color: 227 23% 9%;
     --radius: 0.75rem;
