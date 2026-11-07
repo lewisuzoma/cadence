@@ -142,7 +142,7 @@ export function VideoUploader({
             aria-selected={tab === 'upload'}
             onClick={() => setTab('upload')}
             className={cn(
-              'min-h-9 rounded-md px-3 text-caption font-semibold transition-colors',
+              'min-h-9 rounded-md px-3 text-caption font-semibold transition-colors max-sm:min-h-11',
               tab === 'upload'
                 ? 'bg-card text-foreground shadow-sm'
                 : 'text-secondary-foreground hover:text-foreground',
@@ -156,7 +156,7 @@ export function VideoUploader({
             aria-selected={tab === 'url'}
             onClick={() => setTab('url')}
             className={cn(
-              'min-h-9 rounded-md px-3 text-caption font-semibold transition-colors',
+              'min-h-9 rounded-md px-3 text-caption font-semibold transition-colors max-sm:min-h-11',
               tab === 'url'
                 ? 'bg-card text-foreground shadow-sm'
                 : 'text-secondary-foreground hover:text-foreground',

@@ -147,7 +147,7 @@ export function LearnerProgressPage() {
                   aria-pressed={filter === option.value}
                   onClick={() => setFilter(option.value)}
                   className={cn(
-                    'flex min-h-9 items-center gap-1.5 rounded-pill px-3 text-caption font-semibold transition-colors',
+                    'flex min-h-9 items-center gap-1.5 rounded-pill px-3 text-caption font-semibold transition-colors max-sm:min-h-11',
                     filter === option.value
                       ? 'bg-card text-foreground shadow-sm ring-1 ring-border'
                       : 'text-secondary-foreground hover:bg-muted',

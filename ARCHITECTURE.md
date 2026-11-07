@@ -562,7 +562,10 @@ One `StorageProvider` seam, two drivers:
   gets working uploads from `docker compose up` with no cloud account;
 - **s3** talks to the MinIO service in Compose, and to S3 or R2 in
   production. The browser PUTs straight to storage there, so a 2 GB video
-  never passes through the API process.
+  never passes through the API process. MinIO is behind the `storage`
+  Compose profile, so the default `up` neither starts nor pulls it — a
+  machine with a restricted registry should not fail its whole stack over
+  a container the default configuration never uses.
 
 Nothing above the seam knows which is configured. The tests run against the
 local driver writing real files to a temp directory, so none of the storage

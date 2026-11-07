@@ -114,7 +114,7 @@ export function AdminApplicationsPage() {
                   aria-pressed={active}
                   onClick={() => setParam('status', tab.value ?? 'ALL')}
                   className={cn(
-                    'flex min-h-10 items-center gap-1.5 rounded-pill px-3.5 text-small font-semibold transition-colors',
+                    'flex min-h-10 items-center gap-1.5 rounded-pill px-3.5 text-small font-semibold transition-colors max-sm:min-h-11',
                     active
                       ? 'bg-primary-tint text-primary-hover'
                       : 'text-secondary-foreground hover:bg-muted',

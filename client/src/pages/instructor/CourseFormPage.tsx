@@ -547,7 +547,7 @@ export function CourseFormPage() {
                                 aria-checked={field.value === level}
                                 onClick={() => field.onChange(level)}
                                 className={cn(
-                                  'min-h-10 flex-1 rounded-md px-2 text-small font-semibold transition-colors',
+                                  'min-h-10 flex-1 rounded-md px-2 text-small font-semibold transition-colors max-sm:min-h-11',
                                   field.value === level
                                     ? 'bg-card text-foreground shadow-sm'
                                     : 'text-secondary-foreground hover:text-foreground',

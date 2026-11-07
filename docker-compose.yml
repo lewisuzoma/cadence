@@ -30,12 +30,20 @@ services:
 
   # Object storage for lesson videos and images.
   #
-  # Only used when STORAGE_DRIVER=s3.  The default is `local`, which needs
-  # no service at all — that is deliberate, so a reviewer gets working
-  # uploads from `docker compose up` without configuring anything.  Set
-  # STORAGE_DRIVER=s3 in .env to route uploads here instead.
+  # Behind the `storage` profile, so it does NOT start with a plain
+  # `docker compose up`.  Two reasons:
+  #
+  #  * the default STORAGE_DRIVER is `local`, which needs no service at
+  #    all — uploads work out of the box without it;
+  #  * a machine that cannot pull the minio images (a restricted registry,
+  #    a mirror, an offline build) would otherwise fail the whole `up` over
+  #    a service the default configuration never touches.
+  #
+  # To use it:  STORAGE_DRIVER=s3 in .env, then
+  #   docker compose --profile storage up --build
   minio:
     image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    profiles: [storage]
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -59,6 +67,7 @@ services:
   # a clean volume.
   minio-bucket:
     image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    profiles: [storage]
     depends_on:
       minio:
         condition: service_healthy
@@ -121,11 +130,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      # Started but not waited on: with the default local driver MinIO is
-      # not needed at all, and a reviewer who never touches S3 should not
-      # have the API's startup gated on it.
-      minio:
-        condition: service_started
     healthcheck:
       # Returns 200 only after a real `SELECT 1` against Postgres succeeds.
       test:

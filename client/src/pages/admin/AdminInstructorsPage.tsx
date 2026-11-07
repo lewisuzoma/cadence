@@ -110,7 +110,7 @@ export function AdminInstructorsPage() {
                     aria-pressed={active}
                     onClick={() => setParam('status', tab.value)}
                     className={cn(
-                      'flex min-h-10 items-center gap-1.5 rounded-pill px-3.5 text-small font-semibold transition-colors',
+                      'flex min-h-10 items-center gap-1.5 rounded-pill px-3.5 text-small font-semibold transition-colors max-sm:min-h-11',
                       active
                         ? 'bg-foreground text-background'
                         : 'border border-border text-secondary-foreground hover:bg-muted',

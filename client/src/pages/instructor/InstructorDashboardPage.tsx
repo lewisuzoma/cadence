@@ -249,7 +249,7 @@ export function InstructorDashboardPage() {
                   onClick={() => setFilter(option.value)}
                   aria-pressed={filter === option.value}
                   className={cn(
-                    'min-h-9 rounded-pill px-3 text-caption font-semibold transition-colors',
+                    'min-h-9 rounded-pill px-3 text-caption font-semibold transition-colors max-sm:min-h-11',
                     filter === option.value
                       ? 'bg-foreground text-background'
                       : 'border border-border text-secondary-foreground hover:bg-muted',

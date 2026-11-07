@@ -246,9 +246,22 @@ Course thumbnails, instructor photos and lesson videos go through one
 | `local` *(default)* | Writes to a directory, mounted as a named Docker volume | The default so that `docker compose up` gives working uploads with no cloud account to set up |
 | `s3` | S3-compatible object storage — the `minio` service locally, S3 or R2 in production. The browser uploads **straight to storage**, so large videos never pass through the API | Production, or to exercise the real path locally |
 
-To use MinIO locally, set `STORAGE_DRIVER=s3` in `.env` and bring the stack
-up. Compose starts `minio` and a one-shot `minio-bucket` job that creates
-the bucket; the console is at <http://localhost:9001>.
+MinIO sits behind an opt-in Compose profile, so a plain `docker compose up`
+never touches it. To use it:
+
+```bash
+# set STORAGE_DRIVER=s3 in .env, then
+docker compose --profile storage up --build
+```
+
+That starts `minio` plus a one-shot `minio-bucket` job that creates the
+bucket; the console is at <http://localhost:9001>.
+
+The profile exists for a practical reason as well as a tidy one: the
+default driver needs no service at all, and a machine that cannot pull the
+MinIO images — a restricted registry, a mirror, an offline build — should
+not have `docker compose up` fail over a container the default
+configuration never uses.
 
 **Never commit real credentials.** The values in `.env.example` are MinIO's
 local defaults and are not secrets; in production every `S3_*` value comes
