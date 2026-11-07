@@ -8,6 +8,20 @@ export const idParamSchema = z.object({ id: uuidSchema });
 export type IdParam = z.infer<typeof idParamSchema>;
 
 /**
+ * A route with two ids, such as a learner's progress within a course.
+ *
+ * It has to be its own schema rather than reusing `idParamSchema`: the
+ * validator *replaces* `req.params` with what it parsed, so validating a
+ * two-id route against the one-id schema silently drops the second id and
+ * the handler reads `undefined`.
+ */
+export const courseLearnerParamsSchema = z.object({
+  id: uuidSchema,
+  userId: uuidSchema,
+});
+export type CourseLearnerParams = z.infer<typeof courseLearnerParamsSchema>;
+
+/**
  * Slugs are lowercase kebab-case.  Course lookups accept either a UUID or a
  * slug, so the catalog can use readable URLs while the admin UI uses ids.
  */

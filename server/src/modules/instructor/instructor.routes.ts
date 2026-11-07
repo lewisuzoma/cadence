@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import {
   courseInputSchema,
+  courseLearnerParamsSchema,
+  courseLearnerQuerySchema,
   courseStatusUpdateSchema,
   courseUpdateSchema,
   idParamSchema,
@@ -17,6 +19,7 @@ import { authenticate, requirePermission } from '../../middlewares/authenticate.
 import { csrfProtection } from '../../middlewares/csrf.js';
 import { asyncHandler } from '../../middlewares/errorHandler.js';
 import { validate } from '../../middlewares/validate.js';
+import { analyticsController } from '../analytics/analytics.controller.js';
 import { coursesController } from '../courses/courses.controller.js';
 import { lessonsController } from '../lessons/lessons.controller.js';
 import { instructorController } from './instructor.controller.js';
@@ -217,4 +220,32 @@ instructorRouter.delete(
   requirePermission('lesson:manage-own'),
   validate({ params: idParamSchema }),
   asyncHandler(lessonsController.deleteLesson),
+);
+
+// --- analytics and learner monitoring --------------------------------------
+//
+// Reads, so `instructor:dashboard` rather than `course:manage-own`: a
+// suspended instructor can still see how their published courses are doing,
+// they simply cannot change anything.
+
+instructorRouter.get(
+  '/courses/:id/analytics',
+  requirePermission('analytics:own-courses'),
+  validate({ params: idParamSchema }),
+  asyncHandler(analyticsController.course),
+);
+
+instructorRouter.get(
+  '/courses/:id/learners',
+  requirePermission('analytics:own-courses'),
+  validate({ params: idParamSchema, query: courseLearnerQuerySchema }),
+  asyncHandler(analyticsController.learners),
+);
+
+instructorRouter.get(
+  '/courses/:id/learners/:userId/progress',
+  requirePermission('analytics:own-courses'),
+  // Both ids, because `validate` replaces req.params with what it parsed.
+  validate({ params: courseLearnerParamsSchema }),
+  asyncHandler(analyticsController.learnerProgress),
 );

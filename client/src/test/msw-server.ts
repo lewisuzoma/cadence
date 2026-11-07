@@ -32,6 +32,7 @@ export const learnerUser: User = {
   role: 'LEARNER',
   isActive: true,
   createdAt: '2026-01-01T00:00:00.000Z',
+  instructorStatus: null,
 };
 
 export const adminUser: User = {
@@ -48,6 +49,8 @@ export const courseSummary: CourseSummary = {
   slug: 'typescript-for-production-apis',
   title: 'TypeScript for Production APIs',
   description: 'Build a typed Node.js API end to end, with the tests that keep it honest.',
+  shortDescription: 'A typed Node.js API, end to end.',
+  instructor: null,
   category: 'Engineering',
   thumbnailUrl: '/thumbnails/typescript-for-production-apis.svg',
   difficulty: 'INTERMEDIATE',
@@ -75,6 +78,9 @@ export const enrolledCourse: CourseSummary = {
 
 export const courseDetail: CourseDetail = {
   ...courseSummary,
+  learningObjectives: [],
+  prerequisites: [],
+  targetAudience: '',
   createdBy: { id: adminUser.id, firstName: 'Tunde', lastName: 'Bakare' },
   modules: [
     {
