@@ -53,18 +53,28 @@ describe('permission map', () => {
     }
   });
 
-  it('is additive: INSTRUCTOR ⊇ LEARNER and ADMIN ⊇ INSTRUCTOR', () => {
-    for (const permission of ROLE_PERMISSIONS.LEARNER) {
+  it('is additive for every learning capability', () => {
+    for (const permission of LEARNER_CAPABILITIES) {
       expect(ROLE_PERMISSIONS.INSTRUCTOR).toContain(permission);
+      expect(ROLE_PERMISSIONS.ADMIN).toContain(permission);
     }
     for (const permission of ROLE_PERMISSIONS.INSTRUCTOR) {
       expect(ROLE_PERMISSIONS.ADMIN).toContain(permission);
     }
   });
 
-  it('gives ADMIN every permission', () => {
+  it('makes instructor:apply the one grant that is NOT inherited', () => {
+    // An instructor has nothing to apply for and an admin already holds
+    // every teaching permission, so the CTA disappears without any
+    // role comparison at the places it is rendered.
+    expect(ROLE_PERMISSIONS.LEARNER).toContain('instructor:apply');
+    expect(ROLE_PERMISSIONS.INSTRUCTOR).not.toContain('instructor:apply');
+    expect(ROLE_PERMISSIONS.ADMIN).not.toContain('instructor:apply');
+  });
+
+  it('gives ADMIN every permission but instructor:apply', () => {
     for (const permission of PERMISSIONS) {
-      expect(can(admin, permission)).toBe(true);
+      expect(can(admin, permission)).toBe(permission !== 'instructor:apply');
     }
   });
 });
@@ -81,6 +91,7 @@ describe('can()', () => {
     for (const permission of PERMISSIONS) {
       expect(can({ ...admin, isActive: false }, permission)).toBe(false);
       expect(can({ ...instructor, isActive: false }, permission)).toBe(false);
+      expect(can({ ...learner, isActive: false }, permission)).toBe(false);
     }
   });
 

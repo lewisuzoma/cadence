@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import {
   activityQuerySchema,
+  adminApplicationQuerySchema,
   adminCourseQuerySchema,
+  adminInstructorQuerySchema,
+  applicationNoteSchema,
+  approveApplicationSchema,
   adminUserQuerySchema,
   adminUserUpdateSchema,
   completeLessonSchema,
@@ -11,26 +15,39 @@ import {
   courseUpdateSchema,
   enrollmentQuerySchema,
   idParamSchema,
+  instructorApplicationInputSchema,
+  instructorApplicationUpdateSchema,
   lessonInputSchema,
   lessonUpdateSchema,
   moduleInputSchema,
   moduleUpdateSchema,
+  notificationQuerySchema,
   paginationQuerySchema,
   progressQuerySchema,
+  reinstateInstructorSchema,
+  rejectApplicationSchema,
   reorderLessonsSchema,
   saveProgressSchema,
+  suspendInstructorSchema,
 } from '@cadence/shared';
-import { authenticate, optionalAuthenticate, requireRole } from './middlewares/authenticate.js';
+import {
+  authenticate,
+  optionalAuthenticate,
+  requirePermission,
+  requireRole,
+} from './middlewares/authenticate.js';
 import { csrfProtection } from './middlewares/csrf.js';
 import { asyncHandler } from './middlewares/errorHandler.js';
 import { validate } from './middlewares/validate.js';
 import { adminController } from './modules/admin/admin.controller.js';
+import { applicationsController } from './modules/applications/applications.controller.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { coursesController } from './modules/courses/courses.controller.js';
 import { dashboardController } from './modules/dashboard/dashboard.controller.js';
 import { enrollmentController } from './modules/enrollment/enrollment.controller.js';
 import { instructorRouter } from './modules/instructor/instructor.routes.js';
 import { lessonsController } from './modules/lessons/lessons.controller.js';
+import { notificationsController } from './modules/notifications/notifications.controller.js';
 import { progressController } from './modules/progress/progress.controller.js';
 
 /**
@@ -144,6 +161,69 @@ apiRouter.get(
   asyncHandler(dashboardController.myActivity),
 );
 
+// --- instructor applications (the applicant's own) -------------------------
+// Every path is `/me`-shaped: no id in the URL selects which application to
+// act on, so there is no number to change to reach someone else's.
+
+apiRouter.post(
+  '/instructor-applications',
+  authenticate,
+  csrfProtection,
+  requirePermission('instructor:apply'),
+  validate({ body: instructorApplicationInputSchema }),
+  asyncHandler(applicationsController.apply),
+);
+
+/*
+ * Reading your own status needs only a session, not `instructor:apply`: an
+ * approved or suspended instructor has to be able to read this page too, and
+ * they no longer hold that permission.
+ */
+apiRouter.get(
+  '/instructor-applications/me',
+  authenticate,
+  asyncHandler(applicationsController.getMine),
+);
+
+apiRouter.patch(
+  '/instructor-applications/me',
+  authenticate,
+  csrfProtection,
+  validate({ body: instructorApplicationUpdateSchema }),
+  asyncHandler(applicationsController.updateMine),
+);
+
+apiRouter.post(
+  '/instructor-applications/me/withdraw',
+  authenticate,
+  csrfProtection,
+  asyncHandler(applicationsController.withdrawMine),
+);
+
+// --- notifications ---------------------------------------------------------
+
+apiRouter.get(
+  '/notifications',
+  authenticate,
+  validate({ query: notificationQuerySchema }),
+  asyncHandler(notificationsController.list),
+);
+
+apiRouter.post(
+  '/notifications/read-all',
+  authenticate,
+  csrfProtection,
+  asyncHandler(notificationsController.markAllRead),
+);
+
+apiRouter.post(
+  '/notifications/:id/read',
+  authenticate,
+  csrfProtection,
+  validate({ params: idParamSchema }),
+  asyncHandler(notificationsController.markRead),
+);
+
 // --- admin -----------------------------------------------------------------
 // One guard chain for the whole namespace: authenticated, CSRF-checked on
 // mutations, and ADMIN-only.  A learner hitting any of these gets a 403.
@@ -174,6 +254,19 @@ admin.get('/users/:id/progress', validate({ params: idParamSchema }), asyncHandl
 admin.patch('/users/:id', validate({ params: idParamSchema, body: adminUserUpdateSchema }), asyncHandler(adminController.setActive));
 admin.get('/courses/:id/learners', validate({ params: idParamSchema, query: paginationQuerySchema }), asyncHandler(adminController.courseLearners));
 admin.get('/activity', validate({ query: activityQuerySchema }), asyncHandler(adminController.activity));
+
+// Instructor applications and instructor management.  Inside the admin
+// router, so they inherit `requireRole('ADMIN')` — an instructor reaching
+// any of these is refused before the handler runs.
+admin.get('/instructor-applications', validate({ query: adminApplicationQuerySchema }), asyncHandler(applicationsController.list));
+admin.get('/instructor-applications/:id', validate({ params: idParamSchema }), asyncHandler(applicationsController.detail));
+admin.post('/instructor-applications/:id/approve', validate({ params: idParamSchema, body: approveApplicationSchema }), asyncHandler(applicationsController.approve));
+admin.post('/instructor-applications/:id/reject', validate({ params: idParamSchema, body: rejectApplicationSchema }), asyncHandler(applicationsController.reject));
+admin.post('/instructor-applications/:id/notes', validate({ params: idParamSchema, body: applicationNoteSchema }), asyncHandler(applicationsController.addNote));
+
+admin.get('/instructors', validate({ query: adminInstructorQuerySchema }), asyncHandler(applicationsController.listInstructors));
+admin.post('/instructors/:id/suspend', validate({ params: idParamSchema, body: suspendInstructorSchema }), asyncHandler(applicationsController.suspend));
+admin.post('/instructors/:id/reinstate', validate({ params: idParamSchema, body: reinstateInstructorSchema }), asyncHandler(applicationsController.reinstate));
 
 apiRouter.use('/admin', admin);
 

@@ -6,7 +6,14 @@ import {
 import { z } from 'zod';
 import {
   activityItemSchema,
+  adminApplicationDetailSchema,
+  adminApplicationListItemSchema,
+  adminApplicationQuerySchema,
   adminCourseQuerySchema,
+  adminInstructorListItemSchema,
+  adminInstructorQuerySchema,
+  applicationNoteSchema,
+  approveApplicationSchema,
   adminLearnerDetailSchema,
   adminUserQuerySchema,
   adminUserRowSchema,
@@ -22,18 +29,41 @@ import {
   enrollmentQuerySchema,
   enrollmentSchema,
   enrollmentWithCourseSchema,
+  courseAnalyticsSchema,
+  courseLearnerQuerySchema,
+  courseLearnerRowSchema,
   forgotPasswordSchema,
+  instructorActivityItemSchema,
+  instructorActivityQuerySchema,
+  instructorApplicationInputSchema,
+  instructorApplicationUpdateSchema,
+  instructorCourseCardSchema,
+  instructorCourseQuerySchema,
+  instructorDashboardSchema,
+  instructorProfileSchema,
+  instructorProfileUpdateSchema,
+  learnerCourseProgressSchema,
   learnerDashboardSchema,
   lessonDetailSchema,
   lessonInputSchema,
   lessonSummarySchema,
   loginSchema,
+  mediaAssetSchema,
   moduleInputSchema,
+  myApplicationSchema,
+  notificationListSchema,
+  notificationQuerySchema,
+  presignUploadSchema,
+  presignedUploadSchema,
   progressResultSchema,
+  publishChecklistSchema,
   registerSchema,
+  reinstateInstructorSchema,
+  rejectApplicationSchema,
   reorderLessonsSchema,
   resetPasswordSchema,
   saveProgressSchema,
+  suspendInstructorSchema,
   adminDashboardSchema,
   userSchema,
 } from '@cadence/shared';
@@ -172,6 +202,59 @@ get('/enrollments/me', { tag: 'Enrollment', summary: "The caller's enrollments",
 get('/lessons/{lessonId}/progress', { tag: 'Progress', summary: 'Progress on one lesson', response: z.object({ lessonId: z.string(), courseId: z.string(), durationSeconds: z.number(), progress: z.any() }), secure: true });
 mutate('put', '/lessons/{lessonId}/progress', { tag: 'Progress', summary: 'Save a watch position', body: saveProgressSchema, response: progressResultSchema });
 mutate('post', '/lessons/{lessonId}/complete', { tag: 'Progress', summary: 'Mark a lesson complete (idempotent)', body: completeLessonSchema, response: progressResultSchema });
+
+// --- instructor applications (applicant) -----------------------------------
+mutate('post', '/instructor-applications', { tag: 'Instructor applications', summary: 'Apply to become an instructor. Name and email come from the session, never the body.', body: instructorApplicationInputSchema, response: myApplicationSchema, status: 201 });
+get('/instructor-applications/me', { tag: 'Instructor applications', summary: "The caller's application status, derived (NOT_APPLIED / PENDING / APPROVED / REJECTED / WITHDRAWN / SUSPENDED) with the reapply cooldown and the history they may see", response: myApplicationSchema, secure: true });
+mutate('patch', '/instructor-applications/me', { tag: 'Instructor applications', summary: 'Edit a PENDING application. 409 if it was decided in the meantime.', body: instructorApplicationUpdateSchema, response: myApplicationSchema });
+mutate('post', '/instructor-applications/me/withdraw', { tag: 'Instructor applications', summary: 'Withdraw a PENDING application. The row is kept as history.', response: myApplicationSchema });
+
+// --- instructor applications (admin review) --------------------------------
+get('/admin/instructor-applications', { tag: 'Admin — instructors', summary: 'The review queue, oldest pending first. `meta.counts` carries the per-status tab counts.', response: z.array(adminApplicationListItemSchema), query: adminApplicationQuerySchema, secure: true, list: true });
+get('/admin/instructor-applications/{id}', { tag: 'Admin — instructors', summary: "One application with the applicant's account summary and the full decision history, internal notes included", response: adminApplicationDetailSchema, secure: true });
+mutate('post', '/admin/instructor-applications/{id}/approve', { tag: 'Admin — instructors', summary: 'Approve: in one transaction the application becomes APPROVED, the role becomes INSTRUCTOR, a profile is created, an event is recorded and the applicant is notified. 409 if already decided; 403 on your own application.', body: approveApplicationSchema, response: adminApplicationDetailSchema });
+mutate('post', '/admin/instructor-applications/{id}/reject', { tag: 'Admin — instructors', summary: 'Reject with a required reason. The role is unchanged and the applicant may reapply after the cooldown.', body: rejectApplicationSchema, response: adminApplicationDetailSchema });
+mutate('post', '/admin/instructor-applications/{id}/notes', { tag: 'Admin — instructors', summary: 'Add an internal note. Admins only; never shown to the applicant.', body: applicationNoteSchema, response: adminApplicationDetailSchema });
+
+// --- instructor management -------------------------------------------------
+get('/admin/instructors', { tag: 'Admin — instructors', summary: 'Instructors with their course and learner counts', response: z.array(adminInstructorListItemSchema), query: adminInstructorQuerySchema, secure: true, list: true });
+mutate('post', '/admin/instructors/{id}/suspend', { tag: 'Admin — instructors', summary: 'Suspend an instructor with a required reason. Teaching stops on their next request; their own learning, enrollments and progress are untouched.', body: suspendInstructorSchema, response: z.object({ userId: z.string(), status: z.string() }) });
+mutate('post', '/admin/instructors/{id}/reinstate', { tag: 'Admin — instructors', summary: 'Restore a suspended instructor', body: reinstateInstructorSchema, response: z.object({ userId: z.string(), status: z.string() }) });
+
+// --- instructor workspace --------------------------------------------------
+get('/instructor/dashboard', { tag: 'Instructor', summary: 'Teaching overview: stat cards, the course rail and the draft nudge. Scoped to the caller\u2019s own courses.', response: instructorDashboardSchema, secure: true });
+get('/instructor/courses', { tag: 'Instructor', summary: "The caller's courses with teaching statistics. `meta.counts` carries the tab counts.", response: z.array(instructorCourseCardSchema), query: instructorCourseQuerySchema, secure: true, list: true });
+get('/instructor/activity', { tag: 'Instructor', summary: 'Enrollments, lesson completions, progress milestones and course events, merged from real records', response: z.array(instructorActivityItemSchema), query: instructorActivityQuerySchema, secure: true, list: true });
+mutate('post', '/instructor/courses', { tag: 'Instructor', summary: 'Create a course. It starts as a DRAFT and the owner is taken from the session.', body: courseInputSchema, response: courseSummarySchema, status: 201 });
+get('/instructor/courses/{id}', { tag: 'Instructor', summary: "One of the caller's courses, at any status. Another instructor's course answers 404, not 403.", response: courseDetailSchema, secure: true });
+get('/instructor/courses/{id}/publish-checklist', { tag: 'Instructor', summary: 'Every publishing rule and whether it passes', response: publishChecklistSchema, secure: true });
+mutate('patch', '/instructor/courses/{id}', { tag: 'Instructor', summary: 'Update a course. Owner and status cannot be set through this path.', body: courseUpdateSchema, response: courseSummarySchema });
+mutate('delete', '/instructor/courses/{id}', { tag: 'Instructor', summary: 'Delete a course that has no enrollments. 409 with "archive instead" otherwise.' });
+mutate('post', '/instructor/courses/{id}/publish', { tag: 'Instructor', summary: 'Publish. 422 listing every failing checklist rule if it is not ready.', response: courseSummarySchema });
+mutate('post', '/instructor/courses/{id}/unpublish', { tag: 'Instructor', summary: 'Move back to DRAFT. Enrollments and progress are untouched; new enrollments are blocked.', response: courseSummarySchema });
+mutate('post', '/instructor/courses/{id}/archive', { tag: 'Instructor', summary: 'Archive. Enrolled learners keep access; the course leaves the catalog.', response: courseSummarySchema });
+mutate('post', '/instructor/courses/{id}/modules', { tag: 'Instructor', summary: 'Add a module', body: moduleInputSchema, response: z.any(), status: 201 });
+mutate('post', '/instructor/modules/{id}/lessons', { tag: 'Instructor', summary: 'Add a lesson', body: lessonInputSchema, response: lessonSummarySchema, status: 201 });
+mutate('patch', '/instructor/modules/{id}/lessons/reorder', { tag: 'Instructor', summary: 'Reorder a module\u2019s lessons in one transaction. The submitted ids must be exactly that module\u2019s lessons.', body: reorderLessonsSchema, response: z.array(lessonSummarySchema) });
+
+// --- instructor profile ----------------------------------------------------
+get('/instructor/profile', { tag: 'Instructor', summary: "The caller's instructor profile", response: instructorProfileSchema, secure: true });
+mutate('patch', '/instructor/profile', { tag: 'Instructor', summary: 'Update the public instructor profile', body: instructorProfileUpdateSchema, response: instructorProfileSchema });
+
+// --- analytics and learner monitoring --------------------------------------
+get('/instructor/courses/{id}/analytics', { tag: 'Instructor analytics', summary: 'Course analytics: stat cards and the four chart series, all from database aggregates', response: courseAnalyticsSchema, secure: true });
+get('/instructor/courses/{id}/learners', { tag: 'Instructor analytics', summary: 'Enrolled learners with server-side search, filters, sorting and pagination. Name, email and progress in this course only.', response: z.array(courseLearnerRowSchema), query: courseLearnerQuerySchema, secure: true, list: true });
+get('/instructor/courses/{id}/learners/{userId}/progress', { tag: 'Instructor analytics', summary: "One learner's progress in this course. 404 if they are not enrolled in it.", response: learnerCourseProgressSchema, secure: true });
+
+// --- uploads ---------------------------------------------------------------
+mutate('post', '/uploads/presign', { tag: 'Uploads', summary: 'Ask for a signed upload URL. Checks ownership, the MIME allow-list and the size limit before issuing one.', body: presignUploadSchema, response: presignedUploadSchema, status: 201 });
+mutate('post', '/uploads/{id}/complete', { tag: 'Uploads', summary: "Confirm an upload. The server verifies the stored object's size and its real type from its magic bytes, extracts the duration and marks it READY.", response: mediaAssetSchema });
+mutate('delete', '/uploads/{id}', { tag: 'Uploads', summary: 'Cancel an upload and delete the stored object' });
+
+// --- notifications ---------------------------------------------------------
+get('/notifications', { tag: 'Notifications', summary: "The caller's notifications, newest first, with an unread count", response: notificationListSchema, query: notificationQuerySchema, secure: true, list: true });
+mutate('post', '/notifications/{id}/read', { tag: 'Notifications', summary: 'Mark one notification read', response: z.object({ unreadCount: z.number() }) });
+mutate('post', '/notifications/read-all', { tag: 'Notifications', summary: 'Mark every notification read', response: z.object({ updated: z.number(), unreadCount: z.number() }) });
 
 // --- dashboards ------------------------------------------------------------
 get('/dashboard/learner', { tag: 'Dashboards', summary: 'Learner dashboard aggregates', response: learnerDashboardSchema, secure: true });

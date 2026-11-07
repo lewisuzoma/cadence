@@ -46,6 +46,48 @@ const envSchema = z
     LOG_LEVEL: z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
       .default('info'),
+
+    // --- instructor feature ------------------------------------------------
+
+    /**
+     * How long a rejected applicant must wait before reapplying.
+     *
+     * `0` means "immediately", which is the useful setting for a demo and
+     * for the test suite; 7 days is the default the review copy promises.
+     */
+    INSTRUCTOR_REAPPLY_COOLDOWN_DAYS: z.coerce.number().int().min(0).max(365).default(7),
+
+    /**
+     * The window that defines an "active" learner in course analytics.
+     *
+     * Defined once, here, because the figure appears on stat cards, in the
+     * active/inactive chart and in the learners table's filter, and three
+     * different windows would be three different truths.
+     */
+    ANALYTICS_ACTIVE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+
+    /**
+     * Where uploaded media goes. `local` writes to a Docker volume and needs
+     * no other configuration, which is what keeps `docker compose up` a
+     * one-liner; `s3` talks to MinIO locally and to S3 or R2 in production.
+     */
+    STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+    STORAGE_LOCAL_DIR: z.string().default('./storage'),
+    S3_ENDPOINT: z.string().url().optional(),
+    S3_BUCKET: z.string().optional(),
+    S3_ACCESS_KEY: z.string().optional(),
+    S3_SECRET_KEY: z.string().optional(),
+    S3_REGION: z.string().default('us-east-1'),
+    /** Force path-style addressing, which MinIO needs and S3 tolerates. */
+    S3_FORCE_PATH_STYLE: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
+
+    MAX_VIDEO_MB: z.coerce.number().int().min(1).max(10_000).default(2048),
+    MAX_IMAGE_MB: z.coerce.number().int().min(1).max(100).default(5),
+    /** Lifetime of a signed upload or playback URL. */
+    SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production' && env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {
@@ -54,6 +96,23 @@ const envSchema = z
         path: ['JWT_REFRESH_SECRET'],
         message: 'The access and refresh secrets must differ in production',
       });
+    }
+
+    /*
+     * Choosing the S3 driver without its settings would start the process
+     * and then fail on the first upload, which is the worst time to find
+     * out. Fail here instead.
+     */
+    if (env.STORAGE_DRIVER === 's3') {
+      for (const key of ['S3_BUCKET', 'S3_ACCESS_KEY', 'S3_SECRET_KEY'] as const) {
+        if (!env[key]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when STORAGE_DRIVER=s3`,
+          });
+        }
+      }
     }
   });
 

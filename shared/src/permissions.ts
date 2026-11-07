@@ -46,16 +46,37 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number];
 
-const LEARNER_PERMISSIONS = [
+/**
+ * Everything about *learning*, which every role keeps for good.
+ *
+ * This is the set the additive-roles guarantee is really about: approval
+ * must never cost someone a learner capability, and suspension must never
+ * touch one either.
+ */
+const LEARNING_PERMISSIONS = [
   'learn',
   'course:enroll',
   'progress:write',
   'dashboard:learner',
+] as const satisfies readonly Permission[];
+
+/**
+ * `instructor:apply` is the deliberate exception to inheritance.
+ *
+ * Roles are additive for capabilities, but applying to teach is not a
+ * capability you keep once you have it — an instructor has nothing to apply
+ * for, and an admin already holds every teaching permission. Modelling it as
+ * a learner-only grant means the entry point disappears by itself rather
+ * than needing a `role !== 'INSTRUCTOR'` check beside every place it is
+ * rendered.
+ */
+const LEARNER_PERMISSIONS = [
+  ...LEARNING_PERMISSIONS,
   'instructor:apply',
 ] as const satisfies readonly Permission[];
 
 const INSTRUCTOR_PERMISSIONS = [
-  ...LEARNER_PERMISSIONS,
+  ...LEARNING_PERMISSIONS,
   'instructor:dashboard',
   'course:create',
   'course:manage-own',
@@ -158,15 +179,15 @@ export function canAny(
  * Whether the "Become an Instructor" entry point should be offered.
  *
  * Holding `instructor:apply` is necessary but not sufficient: an applicant
- * with a decision pending is shown "Application pending" instead, and an
- * instructor (suspended or not) has nothing to apply for.
+ * with a decision pending is shown "Application pending" instead. Only
+ * LEARNER holds the permission at all, so instructors and admins fall out
+ * of this without a role check of their own.
  */
 export function canApplyToTeach(
   principal: PermissionPrincipal | null | undefined,
   hasPendingApplication: boolean,
 ): boolean {
   if (!can(principal, 'instructor:apply')) return false;
-  if (principal?.role !== 'LEARNER') return false;
   return !hasPendingApplication;
 }
 
