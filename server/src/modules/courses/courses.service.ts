@@ -25,6 +25,8 @@ import { prisma } from '../../lib/prisma.js';
 import { isUuid, uniqueCourseSlug } from '../../lib/slug.js';
 import type { AuthUser } from '../../middlewares/types.js';
 import { mediaUrlForKey } from '../../lib/media-url.js';
+import { notifyArchivedLearners } from '../lessons/lessons.recalculate.js';
+import { notificationsService } from '../notifications/notifications.service.js';
 import {
   buildCourseSummary,
   buildLessonSummary,
@@ -530,6 +532,62 @@ export const coursesService = {
                   : 'UNPUBLISHED',
           },
         });
+
+        /*
+         * The owner is told what happened to their course, in the same
+         * transaction as the change itself — so a rolled-back publish
+         * never leaves a notification claiming the course is live.
+         *
+         * Sent even when the owner made the change themselves. That looks
+         * redundant and is not: the artifact's own notification list shows
+         * "Course unpublished — moved back to drafts" for a self-triggered
+         * change, because the list doubles as a record of what happened to
+         * a course and when. An admin acting on someone else's course is
+         * the case where it is obviously necessary.
+         */
+        {
+          await notificationsService.notify(
+            [
+              {
+                userId: existing.createdById,
+                type:
+                  status === 'PUBLISHED'
+                    ? 'COURSE_PUBLISHED'
+                    : status === 'ARCHIVED'
+                      ? 'COURSE_ARCHIVED'
+                      : 'COURSE_UNPUBLISHED',
+                title:
+                  status === 'PUBLISHED'
+                    ? 'Course published'
+                    : status === 'ARCHIVED'
+                      ? 'Course archived'
+                      : 'Course unpublished',
+                body:
+                  status === 'PUBLISHED'
+                    ? `"${updated.title}" is live in the catalog.`
+                    : status === 'ARCHIVED'
+                      ? `"${updated.title}" has been archived. Enrolled learners keep access.`
+                      : `"${updated.title}" moved back to drafts.`,
+                link: `/instructor/courses/${id}`,
+              },
+            ],
+            tx,
+          );
+        }
+
+        /*
+         * Archiving is the one status change a *learner* needs to hear
+         * about: the course leaves the catalog, and someone part-way
+         * through it should be told their access is unaffected rather
+         * than discovering the course has vanished from search.
+         */
+        if (status === 'ARCHIVED') {
+          await notifyArchivedLearners(tx, {
+            courseId: id,
+            courseTitle: updated.title,
+            courseSlug: updated.slug,
+          });
+        }
       }
       return updated;
     });

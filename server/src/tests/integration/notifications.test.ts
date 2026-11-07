@@ -162,6 +162,85 @@ describe('notifications', () => {
     expect((await api().get('/api/v1/notifications')).status).toBe(401);
   });
 
+  describe('every event in the spec produces a notification', () => {
+    it('tells the owner when their course is published and unpublished', async () => {
+      const { createCourse, createInstructor } = await import('../helpers/factories.js');
+      const { user } = await createInstructor({ email: 'publisher@test.dev' });
+      const { course } = await createCourse({
+        ownerId: user.id,
+        status: 'DRAFT',
+        lessonCount: 2,
+      });
+      const agent = await loginAs('publisher@test.dev');
+
+      await agent
+        .withCsrf(agent.agent.post(`/api/v1/instructor/courses/${course.id}/publish`))
+        .send({});
+      const published = await prisma.notification.findFirstOrThrow({
+        where: { userId: user.id, type: 'COURSE_PUBLISHED' },
+      });
+      expect(published.body).toContain('live in the catalog');
+
+      await agent
+        .withCsrf(agent.agent.post(`/api/v1/instructor/courses/${course.id}/unpublish`))
+        .send({});
+      await prisma.notification.findFirstOrThrow({
+        where: { userId: user.id, type: 'COURSE_UNPUBLISHED' },
+      });
+    });
+
+    it('tells enrolled learners when a course they are taking is archived', async () => {
+      const { createCourse, createInstructor } = await import('../helpers/factories.js');
+      const { user } = await createInstructor({ email: 'archiver2@test.dev' });
+      const { course } = await createCourse({ ownerId: user.id, status: 'PUBLISHED' });
+
+      const learner = await createUser({ email: 'affected@test.dev' });
+      const bystander = await createUser({ email: 'unaffected@test.dev' });
+      await prisma.enrollment.create({
+        data: { userId: learner.id, courseId: course.id },
+      });
+
+      const agent = await loginAs('archiver2@test.dev');
+      await agent
+        .withCsrf(agent.agent.post(`/api/v1/instructor/courses/${course.id}/archive`))
+        .send({});
+
+      const told = await prisma.notification.findFirstOrThrow({
+        where: { userId: learner.id, type: 'COURSE_ARCHIVED' },
+      });
+      // The reassurance matters as much as the fact.
+      expect(told.body).toMatch(/keep full access/i);
+
+      // Nobody who was not enrolled hears about it.
+      expect(
+        await prisma.notification.count({
+          where: { userId: bystander.id, type: 'COURSE_ARCHIVED' },
+        }),
+      ).toBe(0);
+    });
+
+    it('covers the whole list the spec names', async () => {
+      // A roll-call rather than a behaviour test: each of these is
+      // exercised by its own suite, and this asserts none was dropped
+      // from the enum as the feature was built.
+      const { NOTIFICATION_TYPES } = await import('@cadence/shared');
+      for (const type of [
+        'APPLICATION_SUBMITTED',
+        'APPLICATION_RECEIVED',
+        'APPLICATION_APPROVED',
+        'APPLICATION_REJECTED',
+        'INSTRUCTOR_SUSPENDED',
+        'INSTRUCTOR_REINSTATED',
+        'COURSE_PUBLISHED',
+        'COURSE_UNPUBLISHED',
+        'COURSE_ARCHIVED',
+        'COURSE_LESSONS_ADDED',
+      ] as const) {
+        expect(NOTIFICATION_TYPES).toContain(type);
+      }
+    });
+  });
+
   it('writes the notification in the same transaction as the event', async () => {
     // A rejected approval must leave no notification behind. Driving a real
     // rollback is awkward over HTTP, so this asserts the pairing instead:
