@@ -36,14 +36,64 @@ db (healthy) → migrate (migrations + seed, then exits) → server (healthy) �
 
 ### Seeded accounts
 
-All four use the password `Password123`.
+All of them use the password `Password123`.
 
 | Email | Role | State |
 |---|---|---|
-| `admin@cadence.dev` | ADMIN | Author of the seeded courses |
+| `admin@cadence.dev` | ADMIN | Author of the seeded courses; reviews instructor applications |
 | `ada@cadence.dev` | LEARNER | One course part-watched, one finished, one barely started |
 | `kwame@cadence.dev` | LEARNER | One course completed, plus an archived course |
 | `lina@cadence.dev` | LEARNER | Enrolled, nothing watched (the empty states) |
+| `nadia@cadence.dev` | INSTRUCTOR | One published course with real enrolled learners and progress, one draft |
+| `yusuf@cadence.dev` | INSTRUCTOR | **Suspended** — shows the suspended page, and that learning still works |
+| `kemi@cadence.dev` | LEARNER | Application **PENDING** — the one waiting in the admin queue |
+| `chidi@cadence.dev` | LEARNER | Application **REJECTED** — shows the reason and the reapply date |
+| `sofia@cadence.dev` | LEARNER | Application **WITHDRAWN** — can apply again straight away |
+
+To see the whole instructor flow end to end: sign in as `kemi@cadence.dev`
+to see a pending application, then as `admin@cadence.dev` to approve it,
+then back as Kemi — **without signing out** — and the Teaching workspace is
+there.
+
+## Roles
+
+Three roles, and they are **additive**: becoming an instructor adds
+capabilities and removes none.
+
+| Capability | LEARNER | INSTRUCTOR | ADMIN |
+|---|---|---|---|
+| Browse, enroll, watch, track progress, learner dashboard | ✓ | ✓ | ✓ |
+| Apply to become an instructor | ✓ | – | – |
+| Teaching workspace; create and manage **own** courses, lessons and media | – | ✓ | ✓ (any course) |
+| Enrolled learners and analytics for **own** courses | – | ✓ | ✓ (all courses) |
+| Review applications; suspend and reinstate instructors; manage users; platform analytics | – | – | ✓ |
+
+**Instructors are not administrators.** They never reach `/admin/*` or any
+platform-wide data, and another instructor's course answers 404 — not 403,
+which would confirm it exists.
+
+### Becoming an instructor
+
+1. A learner applies at **Become an Instructor** (profile menu, or the
+   navigation pill). The form prefills their name and email read-only; the
+   server takes both from the session and ignores anything in the body.
+2. While it is pending they can edit or withdraw it. At most one pending
+   application per person, enforced by a partial unique index as well as by
+   the service.
+3. An admin reviews it under **Instructor applications**, and approves or
+   rejects it with a reason. Every decision is recorded as an event with the
+   actor, the timestamp and the reason; internal notes are admins-only and
+   never shown to the applicant.
+4. On approval, in one transaction: the role becomes INSTRUCTOR, an
+   instructor profile is created from the application, and the applicant is
+   notified. **The new permissions apply on their very next request** — no
+   signing out, no waiting for a token to expire.
+5. A rejected applicant can reapply after `INSTRUCTOR_REAPPLY_COOLDOWN_DAYS`
+   (default 7; set `0` to allow it immediately).
+6. An admin can suspend an instructor with a required reason, and reinstate
+   them. **Suspension pauses teaching only**: the person keeps every learner
+   capability, their enrollments and all their progress. Their published
+   courses leave the catalog, and learners already enrolled keep full access.
 
 ### URLs
 
@@ -186,6 +236,38 @@ contain `test`, because it resets whatever it is given.
 
 ---
 
+## Storage for uploads
+
+Course thumbnails, instructor photos and lesson videos go through one
+`StorageProvider` interface with two drivers.
+
+| `STORAGE_DRIVER` | What it does | When |
+|---|---|---|
+| `local` *(default)* | Writes to a directory, mounted as a named Docker volume | The default so that `docker compose up` gives working uploads with no cloud account to set up |
+| `s3` | S3-compatible object storage — the `minio` service locally, S3 or R2 in production. The browser uploads **straight to storage**, so large videos never pass through the API | Production, or to exercise the real path locally |
+
+To use MinIO locally, set `STORAGE_DRIVER=s3` in `.env` and bring the stack
+up. Compose starts `minio` and a one-shot `minio-bucket` job that creates
+the bucket; the console is at <http://localhost:9001>.
+
+**Never commit real credentials.** The values in `.env.example` are MinIO's
+local defaults and are not secrets; in production every `S3_*` value comes
+from the environment.
+
+Whatever the driver:
+
+- Nothing binary is stored in Postgres — only the storage key and metadata.
+- Every upload is verified **after** the bytes land: the real size, and the
+  real type read from the file's magic bytes rather than the declared
+  Content-Type or the extension. Only then is it usable.
+- Lesson videos are not public. The lesson endpoint returns a short-lived
+  signed URL (or streams through the API on the local driver), and only
+  after the normal access check. Seeking works through HTTP Range.
+- With no storage configured at all, external `https://` video URLs still
+  work, which is the documented path for development and demos.
+- Allowed formats: `mp4` and `webm` for video, `jpg`/`png`/`webp` for
+  images, with `MAX_VIDEO_MB` and `MAX_IMAGE_MB` ceilings.
+
 ## Environment variables
 
 Copy `.env.example` to `.env`. Every variable has a working development
@@ -216,9 +298,26 @@ secrets.
 | `API_PORT` | no | `4000` | Published host port for the API |
 | `DB_PORT` | no | `55432` | Published host port for Postgres. Not 5432: a locally installed Postgres usually owns that, and the clash is silent |
 | `VITE_API_URL` | no | `/api/v1` | Baked in at client build time |
+| `INSTRUCTOR_REAPPLY_COOLDOWN_DAYS` | no | `7` | How long a rejected applicant waits. `0` allows an immediate reapplication |
+| `ANALYTICS_ACTIVE_DAYS` | no | `14` | The window that defines an "active" learner. One definition, used by the stat cards, the chart and the table filter alike |
+| `STORAGE_DRIVER` | no | `local` | `local` (a Docker volume) or `s3` |
+| `STORAGE_LOCAL_DIR` | no | `./storage` | Where the local driver writes. **Compose overrides it** with the `mediadata` volume |
+| `S3_ENDPOINT` | s3 only | — | **Compose overrides it** with `http://minio:9000` |
+| `S3_BUCKET` | s3 only | `cadence-media` | Created by the `minio-bucket` job |
+| `S3_ACCESS_KEY` | s3 only | `cadence_minio` | MinIO's local default. Never a real credential in the repo |
+| `S3_SECRET_KEY` | s3 only | `cadence_minio_password` | As above |
+| `S3_REGION` | no | `us-east-1` | |
+| `S3_FORCE_PATH_STYLE` | no | `true` | MinIO requires it; S3 tolerates it |
+| `MINIO_PORT` | no | `9000` | Published host port for the MinIO API |
+| `MINIO_CONSOLE_PORT` | no | `9001` | Published host port for the MinIO console |
+| `MAX_VIDEO_MB` | no | `2048` | Checked before issuing an upload URL, and again against the bytes that arrive |
+| `MAX_IMAGE_MB` | no | `5` | As above |
+| `SIGNED_URL_TTL_SECONDS` | no | `900` | Lifetime of a signed upload or playback URL |
 
 The server validates all of this with Zod at boot and **exits** on anything
-invalid, rather than failing on the first request.
+invalid, rather than failing on the first request. Choosing
+`STORAGE_DRIVER=s3` without its credentials fails at boot too, rather than
+on the first upload.
 
 ---
 
@@ -243,6 +342,14 @@ Every response uses one envelope:
 | Dashboards | `GET /dashboard/learner`, `GET /dashboard/admin`, `GET /activity/me` |
 | Admin content | `GET|POST /admin/courses`, `GET|PATCH|DELETE /admin/courses/:id`, `PATCH /admin/courses/:id/status`, module and lesson CRUD, `PATCH /admin/modules/:id/lessons/reorder` |
 | Admin people | `GET /admin/users`, `/admin/users/:id`, `/admin/users/:id/progress`, `PATCH /admin/users/:id`, `GET /admin/courses/:id/learners`, `GET /admin/activity` |
+| Applications | `POST /instructor-applications`, `GET|PATCH /instructor-applications/me`, `POST /instructor-applications/me/withdraw` |
+| Admin — instructors | `GET /admin/instructor-applications`, `GET /admin/instructor-applications/:id`, `POST …/:id/approve`, `POST …/:id/reject`, `POST …/:id/notes`, `GET /admin/instructors`, `POST /admin/instructors/:id/suspend`, `POST /admin/instructors/:id/reinstate` |
+| Instructor workspace | `GET /instructor/dashboard`, `/instructor/courses`, `/instructor/activity`, `GET|PATCH /instructor/profile` |
+| Instructor courses | `POST /instructor/courses`, `GET|PATCH|DELETE /instructor/courses/:id`, `POST …/:id/publish`, `…/unpublish`, `…/archive`, `GET …/:id/preview`, `GET …/:id/publish-checklist` |
+| Instructor lessons | `POST /instructor/courses/:id/modules`, `PATCH|DELETE /instructor/modules/:id`, `POST /instructor/modules/:id/lessons`, `PATCH|DELETE /instructor/lessons/:id`, `PATCH /instructor/modules/:id/lessons/reorder` |
+| Instructor analytics | `GET /instructor/courses/:id/analytics`, `GET /instructor/courses/:id/learners`, `GET /instructor/courses/:id/learners/:userId/progress` |
+| Uploads | `POST /uploads/presign`, `POST /uploads/:id/complete`, `DELETE /uploads/:id`, `GET /media/*`, `GET /lessons/:id/video` |
+| Notifications | `GET /notifications`, `POST /notifications/:id/read`, `POST /notifications/read-all` |
 
 Authentication is cookie-based: login sets an httpOnly access cookie (15
 minutes), a path-scoped httpOnly refresh cookie (7 days, rotated on use), and

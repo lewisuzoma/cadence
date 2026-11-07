@@ -14,6 +14,8 @@ import { SAMPLE_LESSON_VIDEO } from '@cadence/shared';
 import { PrismaClient, type Difficulty, type CourseStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
+import { seedInstructors } from './seed.instructors.js';
+
 const prisma = new PrismaClient();
 
 /** Low cost here on purpose: seeding 4 users at cost 12 is needlessly slow. */
@@ -759,11 +761,26 @@ async function main() {
   await seedProgress(learners, courses);
   console.log('  enrollments and progress: done');
 
+  const instructors = await seedInstructors(
+    prisma,
+    await bcrypt.hash(SEED_PASSWORD, SEED_BCRYPT_COST),
+    SAMPLE_VIDEO.url,
+    admin.id,
+  );
+  console.log(
+    `  instructors: 2 (1 active, 1 suspended), ${instructors.courses.length} courses, 3 applications`,
+  );
+
   console.log('\nSeed complete. Sign in with:');
-  console.log(`  admin   admin@cadence.dev / ${SEED_PASSWORD}`);
-  console.log(`  learner ada@cadence.dev   / ${SEED_PASSWORD}  (course in progress)`);
-  console.log(`  learner kwame@cadence.dev / ${SEED_PASSWORD}  (course completed)`);
-  console.log(`  learner lina@cadence.dev  / ${SEED_PASSWORD}  (nothing started)`);
+  console.log(`  admin      admin@cadence.dev  / ${SEED_PASSWORD}`);
+  console.log(`  learner    ada@cadence.dev    / ${SEED_PASSWORD}  (course in progress)`);
+  console.log(`  learner    kwame@cadence.dev  / ${SEED_PASSWORD}  (course completed)`);
+  console.log(`  learner    lina@cadence.dev   / ${SEED_PASSWORD}  (nothing started)`);
+  console.log(`  instructor nadia@cadence.dev  / ${SEED_PASSWORD}  (1 published + 1 draft)`);
+  console.log(`  instructor yusuf@cadence.dev  / ${SEED_PASSWORD}  (suspended)`);
+  console.log(`  applicant  kemi@cadence.dev   / ${SEED_PASSWORD}  (application PENDING)`);
+  console.log(`  applicant  chidi@cadence.dev  / ${SEED_PASSWORD}  (application REJECTED)`);
+  console.log(`  applicant  sofia@cadence.dev  / ${SEED_PASSWORD}  (application WITHDRAWN)`);
 }
 
 main()

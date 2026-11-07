@@ -349,3 +349,289 @@ ignores the hint gains nothing.
 - Internationalisation; the copy is currently inline English.
 - A visual regression pass once the design artifacts can be rasterised in the
   build environment.
+
+---
+
+# The instructor feature
+
+Three roles — LEARNER, INSTRUCTOR, ADMIN — where **roles are additive**:
+becoming an instructor adds capabilities and removes none, and suspension
+removes only the teaching ones.
+
+## The permission model
+
+With two roles, `role === 'ADMIN'` was workable. With three it is a bug
+generator: an instructor *is* also a learner, so every `role === 'LEARNER'`
+check would quietly withdraw a learner feature the moment someone was
+approved. So the grants live in one map, `shared/src/permissions.ts`, read
+by both sides:
+
+```
+LEARNING      learn · course:enroll · progress:write · dashboard:learner
+LEARNER     = LEARNING + instructor:apply
+INSTRUCTOR  = LEARNING + instructor:dashboard · course:create
+                       · course:manage-own · lesson:manage-own
+                       · media:upload · analytics:own-courses
+ADMIN       = INSTRUCTOR + course:manage-any · lesson:manage-any
+                         · analytics:any-course · analytics:platform
+                         · application:review · instructor:manage · user:manage
+```
+
+`can(principal, permission)` is the only way anything asks. The server uses
+it in `requirePermission(...)`; the client uses the *same function* in
+`PermissionRoute`, the navigation and the profile menu, so the UI and the
+API cannot disagree about what someone may do.
+
+**`instructor:apply` is the one grant that is not inherited.** An instructor
+has nothing to apply for and an admin already holds every teaching
+permission, so modelling it as learner-only makes the "Become an Instructor"
+entry point disappear by itself rather than needing a role check beside each
+place it is rendered. This matches the capability table in the brief.
+
+**Suspension is not a demotion.** The role stays INSTRUCTOR and no course,
+enrollment or progress row is touched; `can()` withholds the six teaching
+permissions when `instructorStatus === 'SUSPENDED'` and nothing else. That
+one rule is what makes "you can still learn" true rather than merely
+promised in the UI copy.
+
+`requireRole('ADMIN')` is kept for the `/admin/*` namespace. Admin is the
+one case where the role genuinely *is* the boundary — "instructors are not
+administrators" — and stating it as a role stops a future permission grant
+accidentally opening the admin area.
+
+## Permissions take effect on the next request
+
+The brief asks for approval and suspension to bite immediately rather than
+when a 15-minute access token expires. No token-version column was needed:
+`authenticate` already re-read the user row on every request, so it now
+reads the instructor profile's status in the same query. The decision is
+therefore visible to the user's **very next request**, whatever their token
+says.
+
+Approval and suspension additionally revoke the user's refresh-token family.
+That is belt and braces — the access check is live either way — but it stops
+a refresh token captured before the decision being rotated into a session
+carrying the new capability.
+
+On the client, `me` is re-read on three triggers:
+
+1. **window focus** — the common case, when they read the notification in
+   another tab and come back;
+2. **a rising unread count**, because the bell is already polling every 60 s
+   and a new notification may be the approval itself;
+3. **a 401 or 403 from an instructor endpoint**, which means the server
+   disagrees with what the UI believes; the api-client reports it and the
+   app shell invalidates `qk.auth.me()`.
+
+## Ownership
+
+`Course.createdById` is reused as the owner. No rename and no data
+migration: every existing row already carried the right value, and renaming
+would have touched the catalog, dashboard and admin queries for no
+behavioural gain. Services refer to it as `ownerId` in their signatures.
+
+Ownership is enforced **in the service layer**, through `lib/ownership.ts`,
+not only in route middleware — middleware cannot know about a particular
+course. Every instructor-scoped read and write funnels through
+`assertOwnsCourse` or `courseOwnerScope`, so the rule is stated once.
+
+**Another instructor's course answers 404, never 403.** A 403 would confirm
+the course exists, which leaks the catalogue of unpublished work across
+accounts; a 404 makes someone else's draft indistinguishable from a course
+that was never created. The same applies to modules, lessons, analytics,
+learners and uploads.
+
+Ownership is never taken from the request. `CourseInput` has no `ownerId`,
+`instructorId`, `createdById` or `status` field at all, so the schema is the
+mass-assignment defence rather than a filter applied afterwards that someone
+can forget. Tests send all four anyway and assert they are ignored.
+
+## Instructors as learners
+
+An instructor **cannot enroll in their own course** (422, pointing at
+Preview). Not a formality: their enrollment would appear in their own
+learner counts, drag their own completion rate around, and show up in the
+enrolled-learners table as if they were a student. The analytics queries
+additionally exclude the owner and any admin, written into each query rather
+than filtered afterwards.
+
+Preview is the alternative, and it creates nothing: `resolveAccess` returns
+`isTracked: false` for a course's owner, so the player writes no progress
+row and no enrollment. The preview page reuses `getDetail` rather than
+assembling a parallel payload, which is what stops it drifting from the
+learner view.
+
+## When a course's lessons change
+
+Course progress is derived (completed ÷ total) and never stored, which stops
+it drifting — but it also means the *enrollment* rows, which do store a
+status and a completion date, go stale the moment the denominator moves.
+`lessons.recalculate.ts` handles both directions inside the same transaction
+as the change:
+
+- **Deleting a lesson** cascades its progress rows away, so a learner who
+  had 3 of 4 may now have 3 of 3; their enrollment is promoted to COMPLETED.
+- **Adding a lesson** reopens enrollments that were COMPLETED, notifies
+  those learners, and records a `LESSONS_ADDED` course event.
+
+Reopening needed somewhere to keep the history. `completedAt` could not hold
+it — the dashboards and the activity feed read that column as "are they done
+*now*?", so leaving it set would count a reopened learner as finished. A
+second migration therefore adds **`Enrollment.firstCompletedAt`**: "did they
+ever finish?", backfilled from existing completions. Without it, adding a
+lesson would quietly erase the fact that someone had completed the course.
+
+One grouped query, not one per learner: a lesson deletion on a course with
+hundreds of learners must not become hundreds of round trips.
+
+## Applications
+
+An append-only audit trail, not an overwritten field.
+`InstructorApplicationEvent` records actor, action, from-status → to-status,
+reason and timestamp for every decision, and internal notes live there too.
+A rejected applicant reapplies with a **new** application; the old one is
+kept as history.
+
+Three properties are enforced rather than assumed:
+
+- **At most one PENDING application per user**, by a partial unique index
+  written as raw SQL (`WHERE status = 'PENDING'`) because Prisma cannot
+  express a `WHERE` on an index — *and* by a service check. The service
+  check gives the good message; the index catches the race it cannot. Two
+  simultaneous submissions produce one 201 and one 409.
+- **Decisions are safe under concurrency.** Every transition is
+  `updateMany ... WHERE status = 'PENDING'` and checks the affected-row
+  count, so two admins deciding at the same moment yield one success and one
+  409 — never two decisions, never a lost one.
+- **Approval is one transaction**: application → APPROVED, role →
+  INSTRUCTOR, profile created, event recorded, notification written, refresh
+  family revoked. A half-approved user — role changed, no profile — is a
+  state the permission map cannot describe, so it must not be reachable.
+
+An admin cannot decide their own application (403). Rejections and
+suspensions require a reason, enforced in Zod, in the service, and by a
+CHECK constraint so no other write path can record a reasonless one.
+
+## Analytics: the metric definitions
+
+Defined once in `analytics.service.ts` and used by the stat cards, all four
+charts, the learners table and its filters alike. Each screen computing its
+own is how a dashboard ends up showing two different "completion rates" for
+one course with nobody able to say which is right.
+
+| Metric | Definition |
+|---|---|
+| **Enrolled** | Enrollments on the course that are not CANCELLED, **excluding the owner and any admin** |
+| **Active learner** | Any progress or enrollment activity in the last `ANALYTICS_ACTIVE_DAYS` (default 14) |
+| **Completed learner** | Enrollment status COMPLETED |
+| **Completion rate** | Completed learners ÷ enrolled learners (0 % when nobody is enrolled, not a division by zero) |
+| **Average progress** | Mean of each learner's course progress, which is itself completed ÷ total lessons — the same figure the learner sees |
+
+Every one is a SQL aggregate. Nothing loops over learner rows in JavaScript,
+and the learners table searches, filters, sorts and pages in the database —
+otherwise showing ten of a course's learners would mean fetching all of
+them. Time series are grouped by ISO week in UTC (`date_trunc('week', …)`,
+Monday-based), and the charts say which timezone they used.
+
+The aggregates are tested against a fixture whose expected numbers are
+worked out by hand in a table in the test file, so a wrong SQL change shows
+up as a wrong number rather than a different-but-plausible one.
+
+## Privacy
+
+An instructor sees a learner's display name, email and progress **in that
+course**. Not their other courses, not their role, not their account state,
+not when they joined. The `select` clauses are narrow on purpose — the shape
+is the enforcement, not a filter applied later that someone can forget — and
+a test asserts the exact key set of a learner row and that a learner's other
+courses never appear in the response.
+
+A learner not enrolled in the course answers 404, so the endpoint cannot be
+used to confirm that an arbitrary user id exists.
+
+The public catalog exposes `instructor: { displayName, title, photoUrl }`
+and nothing else, built by a dedicated projection from the profile row so
+careless `select` widening upstream cannot leak an email or an account
+state.
+
+## Storage and uploads
+
+One `StorageProvider` seam, two drivers:
+
+- **local** writes to a Docker volume and is the **default**, so a reviewer
+  gets working uploads from `docker compose up` with no cloud account;
+- **s3** talks to the MinIO service in Compose, and to S3 or R2 in
+  production. The browser PUTs straight to storage there, so a 2 GB video
+  never passes through the API process.
+
+Nothing above the seam knows which is configured. The tests run against the
+local driver writing real files to a temp directory, so none of the storage
+behaviour is mocked.
+
+**The bytes are checked twice.** Before a target is issued: ownership of the
+course, the MIME allow-list, the size ceiling. After the bytes land: the
+*real* size, and the real type read from the file's **magic bytes**. The
+declared Content-Type, the filename and the presign request are all
+attacker-controlled and none of them is evidence — a file served back as a
+type it does not have is how an "image" ends up parsed as HTML on our own
+origin. An asset only becomes READY after that check, and the publish
+checklist only accepts READY assets, so nothing a learner can reach has
+skipped it.
+
+**Nothing binary is stored in Postgres** — only the key and the metadata.
+
+**Durations** come from ffprobe where the binary exists, and otherwise from
+the browser's `loadedmetadata` value, sanity-checked and *dropped* rather
+than clamped if implausible. This is not cosmetic: completion is
+`maxWatched ≥ 0.9 × duration`, so a client claiming one second would make a
+lesson trivially completable. Manual entry is allowed only for external
+URLs, where there is genuinely nothing to measure.
+
+**Playback**: lesson videos are never public. The lesson endpoint mints a
+short-lived signed URL (S3) or points at the API's own streaming endpoint
+(local), and only after the existing access check. That endpoint reuses
+`resolveAccess` rather than restating the rule, so the stream and the player
+page cannot disagree about who may watch. HTTP Range is supported so seeking
+works.
+
+Presign requests are rate-limited **per user, not per IP**, so several
+instructors behind one office NAT do not throttle each other.
+
+## Notifications
+
+In-app only. Every notification is created in the **same transaction** as
+the event that causes it, so a user is never told about an approval that was
+rolled back. `NotificationChannel` is declared as the seam an email or push
+channel would plug into — declared rather than merely described, so the
+shape is checked by the compiler.
+
+The bell polls every 60 s and on window focus. Polling rather than
+websockets: one small request a minute is far less machinery for a feature
+whose latency requirement is "within a minute or so".
+
+## Decisions and trade-offs — instructor feature
+
+| Decision | Alternative | Why |
+|---|---|---|
+| Reuse `Course.createdById` as the owner | add an `instructorId` column | Every existing row already carried the right value. A rename would have touched the catalog, dashboard and admin queries for no behavioural gain. |
+| 404, not 403, for another instructor's resource | 403 | A 403 confirms the resource exists, leaking the catalogue of unpublished work. |
+| No `tokenVersion` column | bump a version on every role change | `authenticate` already re-read the user row per request; adding the profile status to that read gives the same guarantee with no new column to keep in step. |
+| `instructor:apply` not inherited | make it additive like everything else | Matches the brief's capability table, and makes the CTA disappear without a role check at each render site. |
+| `Enrollment.firstCompletedAt` as a new column | keep `completedAt` set while reopening | `completedAt IS NOT NULL` is read as "done now" by the dashboards and the activity feed; keeping it set would count a reopened learner as finished. |
+| Edits to a published course go live immediately | a draft/published copy per course | Versioned content is a feature in its own right — two copies of every lesson, a diff UI, and a rule for what an enrolled learner sees mid-course. Out of scope here; the trade-off is that a learner can see a typo being fixed under them. |
+| A suspended instructor's courses are **hidden from the catalog**, and enrolled learners keep access | leave them visible | The brief's recommendation. It stops a suspended instructor gaining new learners without punishing the ones already there. |
+| Local disk is the **default** storage driver | require S3/MinIO | A reviewer must get working uploads from one command. S3 is one env var away. |
+| Charts as CSS rather than a charting library | Recharts | For four charts of this shape it is less code, renders instantly, and the numbers stay real text a screen reader and find-in-page can read. Each also has a table view. |
+| Reordering offers drag **and** explicit arrow buttons | drag plus a keyboard sensor | A keyboard sensor still requires discovering that a handle is draggable. Two visible arrows require no discovery and are what a screen-reader user finds. |
+| Notification polling at 60 s | websockets / SSE | Far less machinery for a one-minute latency requirement. |
+| The dialog's lesson form allows saving without a video | require one | The artifact says so explicitly ("You can save now and add the video later"); the publish checklist is what stops such a lesson reaching a learner. |
+
+## Deviations from the base skill, for this feature
+
+Recorded as the brief asks:
+
+| Deviation | Reason |
+|---|---|
+| `requirePermission` is the guard for new routes, not `requireRole` | The brief requires a permission map; `requireRole` is kept only for `/admin/*`. |
+| The instructor workspace has its own layout rather than extending the learner shell | The artifacts give teaching its own chrome so an instructor always knows which workspace they are in. |
+| Two extra client dependencies: `@dnd-kit/*` and `@aws-sdk/client-s3` (server) | Drag-and-drop reordering and S3-compatible storage are both explicitly required and neither is reasonable to hand-roll. |
