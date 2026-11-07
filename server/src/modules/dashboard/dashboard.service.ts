@@ -8,7 +8,7 @@ import type {
 import { buildMeta, toSkipTake } from '../../lib/pagination.js';
 import { prisma } from '../../lib/prisma.js';
 import { buildCourseSummary, indexBy } from '../courses/courses.projection.js';
-import { coursesRepository } from '../courses/courses.repository.js';
+import { courseListSelect, coursesRepository } from '../courses/courses.repository.js';
 import { enrollmentService } from '../enrollment/enrollment.service.js';
 import { courseProgressPercentage } from '../progress/progress.calculator.js';
 import { dashboardRepository, type ActivityRow } from './dashboard.repository.js';
@@ -91,20 +91,9 @@ export const dashboardService = {
       prisma.course.findMany({
         orderBy: { updatedAt: 'desc' },
         take: 5,
-        select: {
-          id: true,
-          slug: true,
-          title: true,
-          description: true,
-          category: true,
-          thumbnailUrl: true,
-          difficulty: true,
-          status: true,
-          publishedAt: true,
-          createdAt: true,
-          updatedAt: true,
-          createdById: true,
-        },
+        // The shared projection select, so a new course column cannot be
+        // added in one place and forgotten here.
+        select: courseListSelect,
       }),
     ]);
 

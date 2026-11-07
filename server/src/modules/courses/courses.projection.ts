@@ -3,6 +3,7 @@ import type {
   CourseSummary,
   LessonStatus,
   LessonSummary,
+  PublicInstructor,
 } from '@cadence/shared';
 import type { Enrollment, LessonProgress } from '@prisma/client';
 import { courseProgressPercentage } from '../progress/progress.calculator.js';
@@ -44,12 +45,35 @@ export function buildEnrollmentState(
   };
 }
 
+/**
+ * The instructor as the catalog shows them.
+ *
+ * Built from the profile row and nothing else, so no amount of careless
+ * `select` widening upstream can leak an instructor's email, role or account
+ * state into a public response.
+ */
+export function buildPublicInstructor(
+  profile:
+    | { displayName: string; title: string; photoKey: string | null }
+    | null
+    | undefined,
+  photoUrl?: string | null,
+): PublicInstructor | null {
+  if (!profile) return null;
+  return {
+    displayName: profile.displayName,
+    title: profile.title,
+    photoUrl: photoUrl ?? null,
+  };
+}
+
 export function buildCourseSummary(params: {
   course: CourseListRow;
   lessonCount: number;
   totalDuration: number;
   enrollment?: Enrollment | undefined;
   completedLessons?: number;
+  instructor?: PublicInstructor | null;
 }): CourseSummary {
   const { course, lessonCount, totalDuration } = params;
   return {
@@ -57,6 +81,7 @@ export function buildCourseSummary(params: {
     slug: course.slug,
     title: course.title,
     description: course.description,
+    shortDescription: course.shortDescription,
     category: course.category,
     thumbnailUrl: course.thumbnailUrl,
     difficulty: course.difficulty,
@@ -71,6 +96,7 @@ export function buildCourseSummary(params: {
       params.completedLessons ?? 0,
       lessonCount,
     ),
+    instructor: params.instructor ?? null,
   };
 }
 

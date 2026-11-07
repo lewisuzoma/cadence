@@ -3,7 +3,7 @@ import { NotFoundError, UnprocessableError } from '../../lib/errors.js';
 import { buildMeta, toSkipTake } from '../../lib/pagination.js';
 import { prisma } from '../../lib/prisma.js';
 import { buildCourseSummary, indexBy } from '../courses/courses.projection.js';
-import { coursesRepository } from '../courses/courses.repository.js';
+import { courseListSelect, coursesRepository } from '../courses/courses.repository.js';
 import { courseProgressPercentage } from '../progress/progress.calculator.js';
 
 /**
@@ -158,20 +158,9 @@ export const enrollmentService = {
     const [courses, aggregates, completed] = await Promise.all([
       prisma.course.findMany({
         where: { id: { in: courseIds } },
-        select: {
-          id: true,
-          slug: true,
-          title: true,
-          description: true,
-          category: true,
-          thumbnailUrl: true,
-          difficulty: true,
-          status: true,
-          publishedAt: true,
-          createdAt: true,
-          updatedAt: true,
-          createdById: true,
-        },
+        // The shared projection select, so a new course column cannot be
+        // added in one place and forgotten here.
+        select: courseListSelect,
       }),
       coursesRepository.aggregateLessons(courseIds),
       coursesRepository.completedLessonsByCourse(userId, courseIds),

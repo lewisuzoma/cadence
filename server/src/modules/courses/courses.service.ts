@@ -7,19 +7,34 @@ import type {
   CourseSummary,
   CourseUpdateInput,
   ModuleWithLessons,
+  PublishCheck,
+  PublishChecklist,
 } from '@cadence/shared';
 import type { Enrollment, LessonProgress } from '@prisma/client';
-import { ConflictError, NotFoundError, UnprocessableError } from '../../lib/errors.js';
+import { can } from '@cadence/shared';
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  PublishBlockedError,
+} from '../../lib/errors.js';
+import { assertOwnsCourse, isPlatformAdmin } from '../../lib/ownership.js';
 import { buildMeta, toSkipTake } from '../../lib/pagination.js';
 import { prisma } from '../../lib/prisma.js';
 import { isUuid, uniqueCourseSlug } from '../../lib/slug.js';
 import type { AuthUser } from '../../middlewares/types.js';
+import { mediaUrlForKey } from '../../lib/media-url.js';
 import {
   buildCourseSummary,
   buildLessonSummary,
+  buildPublicInstructor,
   indexBy,
 } from './courses.projection.js';
-import { coursesRepository, type CourseListRow } from './courses.repository.js';
+import {
+  courseListSelect,
+  coursesRepository,
+  type CourseListRow,
+} from './courses.repository.js';
 
 /**
  * Course business rules.
@@ -37,15 +52,17 @@ type ListResult = { items: CourseSummary[]; meta: ReturnType<typeof buildMeta> }
 /** Attaches lesson aggregates (and the caller's progress) to course rows. */
 async function decorate(rows: CourseListRow[], userId?: string): Promise<CourseSummary[]> {
   const ids = rows.map((row) => row.id);
-  const [aggregates, enrollments, completed] = await Promise.all([
+  const [aggregates, enrollments, completed, instructors] = await Promise.all([
     coursesRepository.aggregateLessons(ids),
     userId ? coursesRepository.findEnrollmentsForCourses(userId, ids) : Promise.resolve([]),
     userId ? coursesRepository.completedLessonsByCourse(userId, ids) : Promise.resolve([]),
+    coursesRepository.publicInstructorsForCourses(ids),
   ]);
 
   const aggregateByCourse = indexBy(aggregates, (row) => row.courseId);
   const enrollmentByCourse = indexBy(enrollments as Enrollment[], (row) => row.courseId);
   const completedByCourse = indexBy(completed, (row) => row.courseId);
+  const instructorByCourse = indexBy(instructors, (row) => row.courseId);
 
   return rows.map((course) => {
     const aggregate = aggregateByCourse.get(course.id);
@@ -55,6 +72,10 @@ async function decorate(rows: CourseListRow[], userId?: string): Promise<CourseS
       totalDuration: aggregate?.totalDuration ?? 0,
       enrollment: enrollmentByCourse.get(course.id),
       completedLessons: completedByCourse.get(course.id)?.completed ?? 0,
+      instructor: buildPublicInstructor(
+        instructorByCourse.get(course.id)?.profile,
+        mediaUrlForKey(instructorByCourse.get(course.id)?.profile?.photoKey),
+      ),
     });
   });
 }
@@ -106,9 +127,18 @@ export const coursesService = {
     const course = await coursesRepository.findByIdOrSlug(idOrSlug, isUuid(idOrSlug));
     if (!course) throw new NotFoundError('Course');
 
-    const isAdmin = user?.role === 'ADMIN';
-    // Drafts are invisible to everyone but an admin, and answer 404.
-    if (!isAdmin && course.status === 'DRAFT') throw new NotFoundError('Course');
+    /*
+     * Who may see a course outside the catalogue: an admin, or the
+     * instructor who owns it.  Asking `can(...)` rather than comparing the
+     * role is what keeps an approved instructor's learner view intact — they
+     * are still an ordinary learner on everyone else's courses.
+     */
+    const isAdmin = can(user, 'course:manage-any');
+    const isOwner = !!user && course.createdById === user.id && can(user, 'course:manage-own');
+    const privileged = isAdmin || isOwner;
+
+    // Drafts are invisible to everyone else, and answer 404 rather than 403.
+    if (!privileged && course.status === 'DRAFT') throw new NotFoundError('Course');
 
     const enrollment = user
       ? await prisma.enrollment.findUnique({
@@ -116,13 +146,13 @@ export const coursesService = {
         })
       : null;
 
-    // An archived course stays open to people already enrolled (and admins),
-    // but is otherwise gone.
-    if (!isAdmin && course.status === 'ARCHIVED' && !enrollment) {
+    // An archived course stays open to people already enrolled (and to the
+    // owner and admins), but is otherwise gone.
+    if (!privileged && course.status === 'ARCHIVED' && !enrollment) {
       throw new NotFoundError('Course');
     }
 
-    const [modules, aggregates, progressRows] = await Promise.all([
+    const [modules, aggregates, progressRows, instructors] = await Promise.all([
       coursesRepository.findModulesWithLessons(course.id),
       coursesRepository.aggregateLessons([course.id]),
       user
@@ -130,10 +160,11 @@ export const coursesService = {
             where: { userId: user.id, lesson: { courseId: course.id } },
           })
         : Promise.resolve([] as LessonProgress[]),
+      coursesRepository.publicInstructorsForCourses([course.id]),
     ]);
 
     const progressByLesson = indexBy(progressRows, (row) => row.lessonId);
-    const canView = isAdmin || (!!enrollment && enrollment.status !== 'CANCELLED');
+    const canView = privileged || (!!enrollment && enrollment.status !== 'CANCELLED');
     const completedLessons = progressRows.filter((row) => row.isCompleted).length;
     const aggregate = aggregates[0];
 
@@ -146,17 +177,25 @@ export const coursesService = {
       ),
     }));
 
+    const instructorProfile = instructors[0]?.profile;
     const summary = buildCourseSummary({
       course,
       lessonCount: aggregate?.lessonCount ?? 0,
       totalDuration: aggregate?.totalDuration ?? 0,
       enrollment: enrollment ?? undefined,
       completedLessons,
+      instructor: buildPublicInstructor(
+        instructorProfile,
+        mediaUrlForKey(instructorProfile?.photoKey),
+      ),
     });
 
     return {
       ...summary,
       modules: projectedModules,
+      learningObjectives: course.learningObjectives,
+      prerequisites: course.prerequisites,
+      targetAudience: course.targetAudience,
       createdBy: course.createdBy
         ? {
             id: course.createdBy.id,
@@ -167,21 +206,28 @@ export const coursesService = {
     };
   },
 
-  /** Admins see any course by id, whatever its status. */
-  async getForAdmin(id: string): Promise<CourseDetail> {
+  /**
+   * The management view of a single course: any status, full module tree.
+   *
+   * Scoped by ownership rather than by role, so the same method serves the
+   * admin editor and the instructor editor.  Another instructor's course is
+   * a 404 here, which is what stops the instructor workspace from being used
+   * to enumerate the catalogue of unpublished work.
+   */
+  async getForManagement(id: string, actor: AuthUser): Promise<CourseDetail> {
     const course = await coursesRepository.findById(id);
-    if (!course) throw new NotFoundError('Course');
-    return this.getDetail(id, {
-      id: course.createdById,
-      role: 'ADMIN',
-      email: '',
-      firstName: '',
-      lastName: '',
-      isActive: true,
-    });
+    assertOwnsCourse(course, actor);
+    return this.getDetail(id, actor);
   },
 
-  async create(input: CourseInput, adminId: string): Promise<CourseSummary> {
+  /**
+   * Creates a course owned by the acting user.
+   *
+   * The owner comes from the session and from nowhere else: there is no
+   * `ownerId` or `instructorId` in `CourseInput`, so a client cannot create a
+   * course in someone else's name however it shapes the body.
+   */
+  async create(input: CourseInput, actor: AuthUser): Promise<CourseSummary> {
     const slug = input.slug
       ? await (async () => {
           const taken = await coursesRepository.findBySlug(input.slug!);
@@ -190,24 +236,51 @@ export const coursesService = {
         })()
       : await uniqueCourseSlug(input.title);
 
-    const course = await coursesRepository.create({
-      title: input.title,
-      slug,
-      description: input.description,
-      category: input.category,
-      thumbnailUrl: input.thumbnailUrl,
-      difficulty: input.difficulty,
-      createdById: adminId,
-      // New courses always start as drafts: publishing is an explicit act.
-      status: 'DRAFT',
+    const course = await prisma.$transaction(async (tx) => {
+      const created = await tx.course.create({
+        data: {
+          title: input.title,
+          slug,
+          description: input.description,
+          shortDescription: input.shortDescription ?? '',
+          category: input.category,
+          thumbnailUrl: input.thumbnailUrl,
+          difficulty: input.difficulty,
+          learningObjectives: input.learningObjectives ?? [],
+          prerequisites: input.prerequisites ?? [],
+          targetAudience: input.targetAudience ?? '',
+          ...(input.thumbnailAssetId ? { thumbnailAssetId: input.thumbnailAssetId } : {}),
+          createdById: actor.id,
+          // New courses always start as drafts: publishing is an explicit act.
+          status: 'DRAFT',
+        },
+        select: courseListSelect,
+      });
+      // The activity feed reads events, not inferred timestamps, so the
+      // course's first event is written with it in the same transaction.
+      await tx.courseEvent.create({
+        data: { courseId: created.id, actorId: actor.id, type: 'CREATED' },
+      });
+      return created;
     });
 
     return buildCourseSummary({ course, lessonCount: 0, totalDuration: 0 });
   },
 
-  async update(id: string, input: CourseUpdateInput): Promise<CourseSummary> {
+  async update(
+    id: string,
+    input: CourseUpdateInput,
+    actor: AuthUser,
+  ): Promise<CourseSummary> {
     const existing = await coursesRepository.findById(id);
-    if (!existing) throw new NotFoundError('Course');
+    assertOwnsCourse(existing, actor);
+
+    /*
+     * A suspended instructor can still read their courses but cannot change
+     * them.  The route guard says the same thing; repeating it here means the
+     * rule holds for any future caller of this service too.
+     */
+    assertCanEdit(actor);
 
     // Retitling does not change a live slug: inbound links must keep working.
     let slug = existing.slug;
@@ -217,12 +290,33 @@ export const coursesService = {
       slug = input.slug;
     }
 
+    /*
+     * Fields are copied across one by one rather than spread from the body.
+     * `ownerId`, `createdById`, `status` and `role` are therefore
+     * unassignable through this path no matter what the client sends:
+     * changing ownership or publishing is a separate, guarded operation.
+     */
     const course = await coursesRepository.update(id, {
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.shortDescription !== undefined
+        ? { shortDescription: input.shortDescription }
+        : {}),
       ...(input.category !== undefined ? { category: input.category } : {}),
       ...(input.thumbnailUrl !== undefined ? { thumbnailUrl: input.thumbnailUrl } : {}),
       ...(input.difficulty !== undefined ? { difficulty: input.difficulty } : {}),
+      ...(input.learningObjectives !== undefined
+        ? { learningObjectives: input.learningObjectives }
+        : {}),
+      ...(input.prerequisites !== undefined ? { prerequisites: input.prerequisites } : {}),
+      ...(input.targetAudience !== undefined ? { targetAudience: input.targetAudience } : {}),
+      ...(input.thumbnailAssetId !== undefined
+        ? {
+            thumbnailAsset: input.thumbnailAssetId
+              ? { connect: { id: input.thumbnailAssetId } }
+              : { disconnect: true },
+          }
+        : {}),
       slug,
     });
 
@@ -235,26 +329,176 @@ export const coursesService = {
   },
 
   /**
+   * Evaluates every publishing rule and reports all of them.
+   *
+   * Deliberately not fail-fast: the editor shows this as a checklist, and an
+   * author who fixes one problem only to be told about the next one is being
+   * made to do the work the server could have done in a single pass.
+   */
+  async publishChecklist(id: string, actor: AuthUser): Promise<PublishChecklist> {
+    const course = await prisma.course.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        shortDescription: true,
+        category: true,
+        thumbnailUrl: true,
+        createdById: true,
+      },
+    });
+    assertOwnsCourse(course, actor);
+
+    const [lessons, owner] = await Promise.all([
+      prisma.lesson.findMany({
+        where: { courseId: id },
+        select: {
+          id: true,
+          title: true,
+          durationSeconds: true,
+          videoUrl: true,
+          videoAsset: { select: { status: true } },
+        },
+      }),
+      prisma.user.findUnique({
+        where: { id: course.createdById },
+        select: { instructorProfile: { select: { status: true } } },
+      }),
+    ]);
+
+    /** A lesson is playable with a READY upload or a usable external URL. */
+    const isPlayable = (lesson: (typeof lessons)[number]): boolean =>
+      lesson.videoAsset
+        ? lesson.videoAsset.status === 'READY'
+        : /^https:\/\/\S+$/.test(lesson.videoUrl);
+
+    const withoutVideo = lessons.filter((lesson) => !isPlayable(lesson));
+    const withoutDuration = lessons.filter((lesson) => lesson.durationSeconds <= 0);
+    const untitled = lessons.filter((lesson) => lesson.title.trim().length === 0);
+
+    const checks: PublishCheck[] = [
+      {
+        id: 'title',
+        label: 'Title (6+ characters)',
+        passed: course.title.trim().length >= 6,
+        detail: 'Give the course a title of at least 6 characters.',
+      },
+      {
+        id: 'descriptions',
+        label: 'Short and full descriptions',
+        passed:
+          course.shortDescription.trim().length > 0 && course.description.trim().length >= 80,
+        detail:
+          'Add a one-sentence short description and a full description of 80+ characters.',
+      },
+      {
+        id: 'category',
+        label: 'Category selected',
+        passed: course.category.trim().length > 0,
+        detail: 'Choose a category so the course can be found in the catalog.',
+      },
+      {
+        id: 'thumbnail',
+        label: 'Thumbnail uploaded',
+        passed: course.thumbnailUrl.trim().length > 0,
+        detail: 'Add a 16:9 thumbnail.',
+      },
+      {
+        id: 'has-lessons',
+        label:
+          lessons.length > 0
+            ? `At least one lesson (${lessons.length} added)`
+            : 'At least one lesson',
+        passed: lessons.length > 0,
+        detail: 'A course with no lessons would leave a learner with nothing to watch.',
+      },
+      {
+        id: 'lesson-videos',
+        label: 'Every lesson has a playable video',
+        passed: lessons.length > 0 && withoutVideo.length === 0,
+        detail:
+          withoutVideo.length > 0
+            ? `${withoutVideo.length} lesson${withoutVideo.length === 1 ? '' : 's'} need a video`
+            : 'Each lesson needs a finished upload or a valid https:// URL.',
+        lessonIds: withoutVideo.map((lesson) => lesson.id),
+      },
+      {
+        id: 'lesson-durations',
+        label: 'Every lesson has a duration above 0',
+        passed: lessons.length > 0 && withoutDuration.length === 0 && untitled.length === 0,
+        detail:
+          'Completion is measured against the duration, so every lesson needs a title and a duration above zero.',
+        lessonIds: [...withoutDuration, ...untitled].map((lesson) => lesson.id),
+      },
+      {
+        id: 'owner-active',
+        label: 'Instructor access is active',
+        passed: owner?.instructorProfile?.status !== 'SUSPENDED',
+        detail: 'A suspended instructor cannot publish. Contact support to resolve it.',
+      },
+    ];
+
+    return {
+      courseId: id,
+      checks,
+      passing: checks.filter((check) => check.passed).length,
+      total: checks.length,
+      canPublish: checks.every((check) => check.passed),
+    };
+  },
+
+  /**
    * Status transitions.
-   *  - publishing an empty course is a 422: a learner could enroll and find
-   *    nothing to watch
+   *
+   *  - publishing runs the full checklist and answers 422 with *every*
+   *    failing rule, so the editor can render it rather than guess
    *  - `publishedAt` is stamped once, on the first publish, so re-publishing
    *    after an unpublish does not rewrite history
+   *  - unpublishing and archiving never touch enrollments or progress: they
+   *    change who can *find* the course, not who already has it
    */
-  async setStatus(id: string, status: CourseStatus): Promise<CourseSummary> {
+  async setStatus(
+    id: string,
+    status: CourseStatus,
+    actor: AuthUser,
+  ): Promise<CourseSummary> {
     const existing = await coursesRepository.findById(id);
-    if (!existing) throw new NotFoundError('Course');
+    assertOwnsCourse(existing, actor);
+    assertCanEdit(actor);
 
     if (status === 'PUBLISHED') {
-      const lessonCount = await coursesRepository.countLessons(id);
-      if (lessonCount === 0) {
-        throw new UnprocessableError('Add at least one lesson before publishing this course');
-      }
+      const checklist = await this.publishChecklist(id, actor);
+      if (!checklist.canPublish) throw new PublishBlockedError(checklist);
     }
 
-    const course = await coursesRepository.update(id, {
-      status,
-      ...(status === 'PUBLISHED' && !existing.publishedAt ? { publishedAt: new Date() } : {}),
+    const course = await prisma.$transaction(async (tx) => {
+      const updated = await tx.course.update({
+        where: { id },
+        data: {
+          status,
+          ...(status === 'PUBLISHED' && !existing.publishedAt
+            ? { publishedAt: new Date() }
+            : {}),
+        },
+        select: courseListSelect,
+      });
+
+      if (status !== existing.status) {
+        await tx.courseEvent.create({
+          data: {
+            courseId: id,
+            actorId: actor.id,
+            type:
+              status === 'PUBLISHED'
+                ? 'PUBLISHED'
+                : status === 'ARCHIVED'
+                  ? 'ARCHIVED'
+                  : 'UNPUBLISHED',
+          },
+        });
+      }
+      return updated;
     });
 
     const [aggregate] = await coursesRepository.aggregateLessons([id]);
@@ -267,11 +511,12 @@ export const coursesService = {
 
   /**
    * Deleting a course with learners on it would destroy their progress, so it
-   * is a 409 that tells the admin to archive instead.
+   * is a 409 that tells the owner to archive instead.
    */
-  async remove(id: string): Promise<void> {
+  async remove(id: string, actor: AuthUser): Promise<void> {
     const existing = await coursesRepository.findById(id);
-    if (!existing) throw new NotFoundError('Course');
+    assertOwnsCourse(existing, actor);
+    assertCanEdit(actor);
 
     const enrollments = await coursesRepository.countEnrollments(id);
     if (enrollments > 0) {
@@ -282,3 +527,20 @@ export const coursesService = {
     await coursesRepository.delete(id);
   },
 };
+
+/**
+ * A suspended instructor keeps read access to their workspace — they can see
+ * what is there and why it is paused — but every write is refused.
+ *
+ * 403 and not 404: the course is theirs and they know it exists, so hiding it
+ * would only be confusing. This is the one instructor-facing case where the
+ * reason is safe to state, and the UI has a page for exactly it.
+ */
+function assertCanEdit(actor: AuthUser): void {
+  if (isPlatformAdmin(actor)) return;
+  if (!can(actor, 'course:manage-own')) {
+    throw new ForbiddenError(
+      'Your instructor access is suspended. You can still browse and learn.',
+    );
+  }
+}

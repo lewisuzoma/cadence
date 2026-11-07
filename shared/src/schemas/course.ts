@@ -7,6 +7,7 @@ import {
   slugSchema,
   uuidSchema,
 } from './common.js';
+import { publicInstructorSchema } from './instructor.js';
 import { lessonSummarySchema } from './lesson.js';
 
 export const courseCategorySchema = z
@@ -15,6 +16,15 @@ export const courseCategorySchema = z
   .min(2, 'Category is required')
   .max(60, 'Category must be 60 characters or fewer');
 
+/**
+ * What a course author may send.
+ *
+ * There is deliberately no `status`, `ownerId`, `instructorId` or
+ * `createdById` here. Publishing is a separate guarded operation and the
+ * owner is taken from the session, so neither can be set by shaping the
+ * request body — the schema is the mass-assignment defence, not a filter
+ * applied afterwards that someone can forget.
+ */
 export const courseInputSchema = z.object({
   title: z.string().trim().min(3, 'Title must be at least 3 characters').max(140),
   description: z
@@ -22,9 +32,30 @@ export const courseInputSchema = z.object({
     .trim()
     .min(20, 'Write at least 20 characters so learners know what they get')
     .max(5000),
+  /** One sentence for cards and search results. Required to publish. */
+  shortDescription: z
+    .string()
+    .trim()
+    .max(160, 'Keep the short description under 160 characters')
+    .optional(),
   category: courseCategorySchema,
   thumbnailUrl: mediaUrlSchema,
   difficulty: z.enum(DIFFICULTIES),
+  learningObjectives: z
+    .array(z.string().trim().min(3, 'Write a little more').max(160))
+    .max(10, 'Up to 10 objectives')
+    .optional(),
+  prerequisites: z
+    .array(z.string().trim().min(3, 'Write a little more').max(160))
+    .max(8, 'Up to 8 prerequisites')
+    .optional(),
+  targetAudience: z
+    .string()
+    .trim()
+    .max(600, 'Keep this under 600 characters')
+    .optional(),
+  /** The id of an uploaded image; `null` clears it. */
+  thumbnailAssetId: uuidSchema.nullable().optional(),
   /** Optional on create: the server slugifies the title when it is absent. */
   slug: slugSchema.optional(),
 });
@@ -70,6 +101,7 @@ export const courseSummarySchema = z.object({
   slug: z.string(),
   title: z.string(),
   description: z.string(),
+  shortDescription: z.string(),
   category: z.string(),
   thumbnailUrl: z.string(),
   difficulty: z.enum(DIFFICULTIES),
@@ -82,6 +114,11 @@ export const courseSummarySchema = z.object({
   updatedAt: z.string(),
   /** Present only when the request is authenticated. */
   enrollment: courseEnrollmentStateSchema.nullable(),
+  /**
+   * Who teaches it. The catalog exposes a display name, a title and a photo
+   * and nothing else about the instructor's account.
+   */
+  instructor: publicInstructorSchema.nullable(),
 });
 export type CourseSummary = z.infer<typeof courseSummarySchema>;
 
@@ -95,6 +132,9 @@ export type ModuleWithLessons = z.infer<typeof moduleWithLessonsSchema>;
 
 export const courseDetailSchema = courseSummarySchema.extend({
   modules: z.array(moduleWithLessonsSchema),
+  learningObjectives: z.array(z.string()),
+  prerequisites: z.array(z.string()),
+  targetAudience: z.string(),
   createdBy: z.object({ id: uuidSchema, firstName: z.string(), lastName: z.string() }).nullable(),
 });
 export type CourseDetail = z.infer<typeof courseDetailSchema>;

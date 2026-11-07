@@ -34,6 +34,9 @@ function toPublicUser(row: PublicUserRow): User {
     role: row.role,
     isActive: row.isActive,
     createdAt: row.createdAt.toISOString(),
+    // `null` for anyone who is not an instructor; the client's `can()` reads
+    // it exactly as the server's does.
+    instructorStatus: row.instructorProfile?.status ?? null,
   };
 }
 

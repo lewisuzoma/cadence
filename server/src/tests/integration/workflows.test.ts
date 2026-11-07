@@ -19,7 +19,11 @@ describe('workflows', () => {
     const course = (
       await admin.withCsrf(admin.agent.post('/api/v1/admin/courses')).send({
         title: 'Workflow A Course',
-        description: 'A course used by the end-to-end workflow test suite.',
+        // 80+ characters, and a short description: both are publish
+        // checklist requirements since the instructor feature landed.
+        description:
+          'A course used by the end-to-end workflow test suite, written long enough to satisfy the publish checklist.',
+        shortDescription: 'The course workflow A publishes and enrolls in.',
         category: 'Engineering',
         thumbnailUrl: '/thumbnails/test.svg',
         difficulty: 'BEGINNER',
@@ -45,9 +49,10 @@ describe('workflows', () => {
       lessonIds.push(lesson.body.data.id as string);
     }
 
-    await admin
+    const publishedA = await admin
       .withCsrf(admin.agent.patch(`/api/v1/admin/courses/${course.id}/status`))
       .send({ status: 'PUBLISHED' });
+    expect(publishedA.status).toBe(200);
 
     // --- the learner's journey ------------------------------------------
     const learner = await registerAndLogin('workflow-a@test.dev');
@@ -115,7 +120,9 @@ describe('workflows', () => {
 
     const created = await admin.withCsrf(admin.agent.post('/api/v1/admin/courses')).send({
       title: 'Workflow B Course',
-      description: 'Created by workflow B to prove the publish pipeline works.',
+      description:
+        'Created by workflow B to prove the publish pipeline works, at a length that clears the checklist minimum.',
+      shortDescription: 'The course workflow B publishes.',
       category: 'Data',
       thumbnailUrl: '/thumbnails/test.svg',
       difficulty: 'INTERMEDIATE',
@@ -127,11 +134,15 @@ describe('workflows', () => {
     // A draft is invisible to the learner.
     expect((await learner.agent.get('/api/v1/courses?search=Workflow B')).body.data).toHaveLength(0);
 
-    // Publishing without lessons is refused.
+    // Publishing without lessons is refused, and the refusal names every
+    // failing rule rather than only the first one.
     const tooEarly = await admin
       .withCsrf(admin.agent.patch(`/api/v1/admin/courses/${courseId}/status`))
       .send({ status: 'PUBLISHED' });
     expect(tooEarly.status).toBe(422);
+    expect(Object.keys(tooEarly.body.errors as Record<string, string[]>)).toEqual(
+      expect.arrayContaining(['has-lessons', 'lesson-videos']),
+    );
 
     const module = (
       await admin

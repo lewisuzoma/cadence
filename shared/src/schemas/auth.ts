@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ROLES } from '../enums.js';
+import { INSTRUCTOR_PROFILE_STATUSES, ROLES } from '../enums.js';
 import { uuidSchema } from './common.js';
 
 /**
@@ -116,6 +116,14 @@ export const userSchema = z.object({
   role: z.enum(ROLES),
   isActive: z.boolean(),
   createdAt: z.string(),
+  /**
+   * Instructor standing, or `null` for anyone without a profile.
+   *
+   * Carried on every `me` response because the client's route guards and
+   * navigation ask `can(user, ...)`, and that question cannot be answered
+   * from the role alone once suspension exists.
+   */
+  instructorStatus: z.enum(INSTRUCTOR_PROFILE_STATUSES).nullable().default(null),
 });
 export type User = z.infer<typeof userSchema>;
 

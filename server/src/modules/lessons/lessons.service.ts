@@ -7,7 +7,9 @@ import type {
   ModuleUpdateInput,
 } from '@cadence/shared';
 import type { LessonProgress } from '@prisma/client';
+import { can } from '@cadence/shared';
 import { ConflictError, ForbiddenError, NotFoundError, UnprocessableError } from '../../lib/errors.js';
+import { assertOwnsCourse, isPlatformAdmin } from '../../lib/ownership.js';
 import { prisma } from '../../lib/prisma.js';
 import type { AuthUser } from '../../middlewares/types.js';
 import { buildLessonSummary, indexBy } from '../courses/courses.projection.js';
@@ -31,13 +33,25 @@ async function resolveAccess(
   lesson: { id: string; courseId: string; isPreview: boolean },
   user: AuthUser | undefined,
 ): Promise<LessonAccess> {
-  if (user?.role === 'ADMIN') return { canView: true, isTracked: false };
-
   const course = await prisma.course.findUnique({
     where: { id: lesson.courseId },
-    select: { status: true },
+    select: { status: true, createdById: true },
   });
   if (!course) throw new NotFoundError('Course');
+
+  /*
+   * The owner and admins can watch any lesson of a course they manage, at
+   * any status, and their viewing is never tracked.
+   *
+   * `isTracked: false` is what makes Preview truthful: the instructor can
+   * watch their own course exactly as a learner would and no progress row,
+   * no enrollment and no analytics data point comes of it.
+   */
+  const privileged =
+    isPlatformAdmin(user) ||
+    (!!user && course.createdById === user.id && can(user, 'course:manage-own'));
+  if (privileged) return { canView: true, isTracked: false };
+
   // A draft's lessons must not be distinguishable from lessons that do not exist.
   if (course.status === 'DRAFT') throw new NotFoundError('Lesson');
 
@@ -106,10 +120,13 @@ export const lessonsService = {
   async listForCourse(courseId: string, user: AuthUser | undefined): Promise<LessonSummary[]> {
     const course = await prisma.course.findUnique({
       where: { id: courseId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, createdById: true },
     });
     if (!course) throw new NotFoundError('Course');
-    if (course.status === 'DRAFT' && user?.role !== 'ADMIN') throw new NotFoundError('Course');
+    const privileged =
+      isPlatformAdmin(user) ||
+      (!!user && course.createdById === user.id && can(user, 'course:manage-own'));
+    if (course.status === 'DRAFT' && !privileged) throw new NotFoundError('Course');
 
     const enrollment = user
       ? await prisma.enrollment.findUnique({
@@ -117,7 +134,7 @@ export const lessonsService = {
         })
       : null;
     const canView =
-      user?.role === 'ADMIN' || (!!enrollment && enrollment.status !== 'CANCELLED');
+      privileged || (!!enrollment && enrollment.status !== 'CANCELLED');
 
     const [lessons, progressRows] = await Promise.all([
       prisma.lesson.findMany({
@@ -145,14 +162,19 @@ export const lessonsService = {
     );
   },
 
-  // --- admin: modules ----------------------------------------------------
+  // --- authoring: modules ------------------------------------------------
+  //
+  // Each of these resolves the owning course first and asserts against it,
+  // so a module or lesson id belonging to someone else answers 404 exactly
+  // as the course itself would. Nothing downstream re-checks, because the
+  // check has already happened here.
 
-  async createModule(courseId: string, input: ModuleInput) {
+  async createModule(courseId: string, input: ModuleInput, actor: AuthUser) {
     const course = await prisma.course.findUnique({
       where: { id: courseId },
-      select: { id: true },
+      select: { id: true, createdById: true },
     });
-    if (!course) throw new NotFoundError('Course');
+    assertOwnsCourse(course, actor);
 
     const order = input.order ?? (await nextModuleOrder(courseId));
     return prisma.module.create({
@@ -161,9 +183,13 @@ export const lessonsService = {
     });
   },
 
-  async updateModule(moduleId: string, input: ModuleUpdateInput) {
-    const existing = await prisma.module.findUnique({ where: { id: moduleId } });
+  async updateModule(moduleId: string, input: ModuleUpdateInput, actor: AuthUser) {
+    const existing = await prisma.module.findUnique({
+      where: { id: moduleId },
+      include: { course: { select: { createdById: true } } },
+    });
     if (!existing) throw new NotFoundError('Module');
+    assertOwnsCourse(existing.course, actor, 'Module');
 
     if (input.order !== undefined && input.order !== existing.order) {
       const clash = await prisma.module.findFirst({
@@ -184,12 +210,17 @@ export const lessonsService = {
   },
 
   /** Deleting a module cascades to its lessons, and so to their progress. */
-  async deleteModule(moduleId: string): Promise<void> {
+  async deleteModule(moduleId: string, actor: AuthUser): Promise<void> {
     const existing = await prisma.module.findUnique({
       where: { id: moduleId },
-      select: { id: true, courseId: true },
+      select: {
+        id: true,
+        courseId: true,
+        course: { select: { createdById: true } },
+      },
     });
     if (!existing) throw new NotFoundError('Module');
+    assertOwnsCourse(existing.course, actor, 'Module');
 
     const watched = await prisma.lessonProgress.count({
       where: { lesson: { moduleId } },
@@ -202,14 +233,19 @@ export const lessonsService = {
     await prisma.module.delete({ where: { id: moduleId } });
   },
 
-  // --- admin: lessons ----------------------------------------------------
+  // --- authoring: lessons ------------------------------------------------
 
-  async createLesson(moduleId: string, input: LessonInput) {
+  async createLesson(moduleId: string, input: LessonInput, actor: AuthUser) {
     const module = await prisma.module.findUnique({
       where: { id: moduleId },
-      select: { id: true, courseId: true },
+      select: {
+        id: true,
+        courseId: true,
+        course: { select: { createdById: true } },
+      },
     });
     if (!module) throw new NotFoundError('Module');
+    assertOwnsCourse(module.course, actor, 'Module');
 
     const order = input.order ?? (await nextLessonOrder(moduleId));
     const clash = await prisma.lesson.findFirst({
@@ -234,9 +270,13 @@ export const lessonsService = {
     });
   },
 
-  async updateLesson(lessonId: string, input: LessonUpdateInput) {
-    const existing = await prisma.lesson.findUnique({ where: { id: lessonId } });
+  async updateLesson(lessonId: string, input: LessonUpdateInput, actor: AuthUser) {
+    const existing = await prisma.lesson.findUnique({
+      where: { id: lessonId },
+      include: { course: { select: { createdById: true } } },
+    });
     if (!existing) throw new NotFoundError('Lesson');
+    assertOwnsCourse(existing.course, actor, 'Lesson');
 
     if (input.order !== undefined && input.order !== existing.order) {
       const clash = await prisma.lesson.findFirst({
@@ -262,12 +302,13 @@ export const lessonsService = {
     });
   },
 
-  async deleteLesson(lessonId: string): Promise<void> {
+  async deleteLesson(lessonId: string, actor: AuthUser): Promise<void> {
     const existing = await prisma.lesson.findUnique({
       where: { id: lessonId },
-      select: { id: true },
+      select: { id: true, course: { select: { createdById: true } } },
     });
     if (!existing) throw new NotFoundError('Lesson');
+    assertOwnsCourse(existing.course, actor, 'Lesson');
     // Progress rows cascade with the lesson; course percentages recompute from
     // whatever lessons remain, so no stored total goes stale.
     await prisma.lesson.delete({ where: { id: lessonId } });
@@ -281,7 +322,18 @@ export const lessonsService = {
    * (park on negative orders, then set the final ones) exists because
    * `@@unique([moduleId, order])` would otherwise trip mid-update.
    */
-  async reorderLessons(moduleId: string, lessonIds: string[]): Promise<LessonSummary[]> {
+  async reorderLessons(
+    moduleId: string,
+    lessonIds: string[],
+    actor: AuthUser,
+  ): Promise<LessonSummary[]> {
+    const module = await prisma.module.findUnique({
+      where: { id: moduleId },
+      select: { id: true, course: { select: { createdById: true } } },
+    });
+    if (!module) throw new NotFoundError('Module');
+    assertOwnsCourse(module.course, actor, 'Module');
+
     const lessons = await prisma.lesson.findMany({
       where: { moduleId },
       select: { id: true },

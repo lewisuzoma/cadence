@@ -31,6 +31,15 @@ export const paginationMetaSchema = z.object({
   pageSize: z.number().int(),
   total: z.number().int(),
   totalPages: z.number().int(),
+  /**
+   * Counts per filter tab, where a list has them — "All 4 · Published 2 ·
+   * Drafts 1 · Archived 1" on the instructor's My courses screen.
+   *
+   * They belong in `meta` rather than `data`: they describe the collection
+   * being paged, not the page, and putting them here spares the client a
+   * second request per tab just to render the number beside it.
+   */
+  counts: z.record(z.number().int().min(0)).optional(),
 });
 export type PaginationMeta = z.infer<typeof paginationMetaSchema>;
 

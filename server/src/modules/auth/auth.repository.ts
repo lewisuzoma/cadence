@@ -14,17 +14,37 @@ export const publicUserSelect = {
   role: true,
   isActive: true,
   createdAt: true,
+  /*
+   * The instructor profile's status travels with the user everywhere the
+   * public shape does, so the client can answer "may I?" with the same
+   * `can()` the server uses rather than a second, drifting rule.  Only the
+   * status is selected — the bio, photo and suspension reason are the
+   * instructor-profile endpoint's business, not every /me response's.
+   */
+  instructorProfile: { select: { status: true } },
 } satisfies Prisma.UserSelect;
 
 export type PublicUserRow = Prisma.UserGetPayload<{ select: typeof publicUserSelect }>;
 
 export const authRepository = {
+  /*
+   * Sign-in needs the password hash, so these two return the whole row plus
+   * the instructor status — the status travels with every projection of a
+   * user, and omitting it here would make the response to a fresh login
+   * differ from the response to the /me that follows it.
+   */
   findByEmail(email: string) {
-    return prisma.user.findUnique({ where: { email } });
+    return prisma.user.findUnique({
+      where: { email },
+      include: { instructorProfile: { select: { status: true } } },
+    });
   },
 
   findById(id: string) {
-    return prisma.user.findUnique({ where: { id } });
+    return prisma.user.findUnique({
+      where: { id },
+      include: { instructorProfile: { select: { status: true } } },
+    });
   },
 
   findPublicById(id: string) {

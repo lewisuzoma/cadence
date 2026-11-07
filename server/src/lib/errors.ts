@@ -1,4 +1,4 @@
-import type { ErrorCode } from '@cadence/shared';
+import type { ErrorCode, PublishChecklist } from '@cadence/shared';
 
 /**
  * One error hierarchy for the whole server.  Services throw these; the error
@@ -81,6 +81,36 @@ export class ConflictError extends AppError {
 export class UnprocessableError extends AppError {
   constructor(message: string) {
     super(422, 'UNPROCESSABLE', message);
+  }
+}
+
+/**
+ * Publishing was refused because the course fails its checklist.
+ *
+ * Carries the whole checklist rather than the first failure: the editor
+ * renders it as a list of ticks and crosses, so an author sees everything
+ * left to do at once instead of discovering it one 422 at a time.
+ */
+export class PublishBlockedError extends AppError {
+  readonly checklist: PublishChecklist;
+
+  constructor(checklist: PublishChecklist) {
+    const failed = checklist.checks.filter((check) => !check.passed);
+    super(
+      422,
+      'UNPROCESSABLE',
+      failed.length === 1
+        ? `This course cannot be published yet: ${failed[0]!.label.toLowerCase()}.`
+        : `This course cannot be published yet: ${failed.length} checks still to pass.`,
+      {
+        // Also surfaced as field errors so a plain form renderer shows
+        // something useful without knowing about checklists.
+        fieldErrors: Object.fromEntries(
+          failed.map((check) => [check.id, [check.detail ?? check.label]]),
+        ),
+      },
+    );
+    this.checklist = checklist;
   }
 }
 

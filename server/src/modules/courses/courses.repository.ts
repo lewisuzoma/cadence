@@ -16,6 +16,7 @@ export const courseListSelect = {
   slug: true,
   title: true,
   description: true,
+  shortDescription: true,
   category: true,
   thumbnailUrl: true,
   difficulty: true,
@@ -24,6 +25,10 @@ export const courseListSelect = {
   createdAt: true,
   updatedAt: true,
   createdById: true,
+  learningObjectives: true,
+  prerequisites: true,
+  targetAudience: true,
+  thumbnailAssetId: true,
 } satisfies Prisma.CourseSelect;
 
 export type CourseListRow = Prisma.CourseGetPayload<{ select: typeof courseListSelect }>;
@@ -139,6 +144,34 @@ export const coursesRepository = {
 
   findById(id: string) {
     return prisma.course.findUnique({ where: { id }, select: courseListSelect });
+  },
+
+  /**
+   * Public instructor profiles for a set of courses, in one query.
+   *
+   * Returns only what the catalog is allowed to show. Courses whose owner has
+   * no instructor profile — the admin-authored seed catalogue — are simply
+   * absent from the map, and render without an instructor line.
+   */
+  async publicInstructorsForCourses(courseIds: string[]) {
+    if (courseIds.length === 0) return [];
+    const rows = await prisma.course.findMany({
+      where: { id: { in: courseIds } },
+      select: {
+        id: true,
+        createdBy: {
+          select: {
+            instructorProfile: {
+              select: { displayName: true, title: true, photoKey: true },
+            },
+          },
+        },
+      },
+    });
+    return rows.map((row) => ({
+      courseId: row.id,
+      profile: row.createdBy.instructorProfile,
+    }));
   },
 
   /** Modules with their lessons, ordered, for the course detail page. */

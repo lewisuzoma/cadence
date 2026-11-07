@@ -29,6 +29,7 @@ import { authRouter } from './modules/auth/auth.routes.js';
 import { coursesController } from './modules/courses/courses.controller.js';
 import { dashboardController } from './modules/dashboard/dashboard.controller.js';
 import { enrollmentController } from './modules/enrollment/enrollment.controller.js';
+import { instructorRouter } from './modules/instructor/instructor.routes.js';
 import { lessonsController } from './modules/lessons/lessons.controller.js';
 import { progressController } from './modules/progress/progress.controller.js';
 
@@ -156,6 +157,7 @@ admin.get('/courses/:id', validate({ params: idParamSchema }), asyncHandler(cour
 admin.patch('/courses/:id', validate({ params: idParamSchema, body: courseUpdateSchema }), asyncHandler(coursesController.update));
 admin.delete('/courses/:id', validate({ params: idParamSchema }), asyncHandler(coursesController.remove));
 admin.patch('/courses/:id/status', validate({ params: idParamSchema, body: courseStatusUpdateSchema }), asyncHandler(coursesController.setStatus));
+admin.get('/courses/:id/publish-checklist', validate({ params: idParamSchema }), asyncHandler(coursesController.publishChecklist));
 
 admin.post('/courses/:id/modules', validate({ params: idParamSchema, body: moduleInputSchema }), asyncHandler(lessonsController.createModule));
 admin.patch('/modules/:id', validate({ params: idParamSchema, body: moduleUpdateSchema }), asyncHandler(lessonsController.updateModule));
@@ -174,6 +176,13 @@ admin.get('/courses/:id/learners', validate({ params: idParamSchema, query: pagi
 admin.get('/activity', validate({ query: activityQuerySchema }), asyncHandler(adminController.activity));
 
 apiRouter.use('/admin', admin);
+
+// --- instructor ------------------------------------------------------------
+// Its own router, with per-route permission guards: unlike /admin, the
+// teaching workspace is not one capability. Reading the workspace survives
+// suspension; writing to it does not.
+
+apiRouter.use('/instructor', instructorRouter);
 
 // --- auth (own router: its own rate limits and CSRF exemptions) ------------
 

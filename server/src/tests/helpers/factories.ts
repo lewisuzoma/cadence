@@ -3,6 +3,7 @@ import request from 'supertest';
 import { createApp } from '../../app.js';
 import { CSRF_COOKIE } from '../../lib/cookies.js';
 import { hashPassword } from '../../lib/password.js';
+import type { InstructorApplicationStatus, Role } from '@cadence/shared';
 import { prisma } from '../../lib/prisma.js';
 
 /**
@@ -20,9 +21,17 @@ export function testApp(): Express {
 }
 
 export async function resetDb(): Promise<void> {
+  // Every table, so a row left behind by one file cannot make the next one's
+  // assertions pass or fail for the wrong reason.  CASCADE handles the
+  // foreign keys; listing the tables explicitly means a new one added to the
+  // schema and forgotten here shows up as a test that pollutes its
+  // neighbours, which is easier to diagnose than a silent truncation gap.
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE "lesson_progress", "enrollments", "lessons", "modules",
-                   "courses", "refresh_tokens", "password_reset_tokens", "users"
+    TRUNCATE TABLE "notifications", "course_events", "instructor_application_events",
+                   "instructor_applications", "instructor_profiles",
+                   "lesson_progress", "enrollments", "lessons", "modules",
+                   "courses", "media_assets", "refresh_tokens",
+                   "password_reset_tokens", "users"
     RESTART IDENTITY CASCADE
   `);
 }
@@ -31,7 +40,7 @@ export const TEST_PASSWORD = 'Password123';
 
 export async function createUser(overrides?: {
   email?: string;
-  role?: 'LEARNER' | 'ADMIN';
+  role?: Role;
   firstName?: string;
   lastName?: string;
   isActive?: boolean;
@@ -46,6 +55,71 @@ export async function createUser(overrides?: {
       passwordHash: await hashPassword(overrides?.password ?? TEST_PASSWORD),
       role: overrides?.role ?? 'LEARNER',
       isActive: overrides?.isActive ?? true,
+    },
+  });
+}
+
+/**
+ * An approved instructor: the INSTRUCTOR role *and* the profile that grants
+ * the status, created together because one without the other is a state the
+ * approval transaction never produces.
+ */
+export async function createInstructor(overrides?: {
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  suspended?: boolean;
+  suspensionReason?: string;
+  title?: string;
+}) {
+  const user = await createUser({
+    ...(overrides?.email ? { email: overrides.email } : {}),
+    ...(overrides?.firstName ? { firstName: overrides.firstName } : {}),
+    ...(overrides?.lastName ? { lastName: overrides.lastName } : {}),
+    role: 'INSTRUCTOR',
+  });
+
+  const suspended = overrides?.suspended ?? false;
+  const profile = await prisma.instructorProfile.create({
+    data: {
+      userId: user.id,
+      displayName: `${user.firstName} ${user.lastName}`,
+      title: overrides?.title ?? 'Senior engineer',
+      bio: 'A test instructor created by the suite, with a biography long enough to satisfy the schema minimum of eighty characters.',
+      status: suspended ? 'SUSPENDED' : 'ACTIVE',
+      ...(suspended
+        ? {
+            suspendedAt: new Date(),
+            suspensionReason:
+              overrides?.suspensionReason ?? 'Suspended by the test suite for assertions.',
+          }
+        : {}),
+    },
+  });
+
+  return { user, profile };
+}
+
+/** A PENDING application for an existing learner. */
+export async function createApplication(
+  userId: string,
+  overrides?: { status?: InstructorApplicationStatus; title?: string },
+) {
+  return prisma.instructorApplication.create({
+    data: {
+      userId,
+      professionalTitle: overrides?.title ?? 'Senior backend engineer',
+      expertise: ['TypeScript', 'Node.js'],
+      experience:
+        'Four years running internal workshops and mentoring new hires through their first production API.',
+      biography:
+        'I build and maintain payment APIs. I care about boring, reliable systems: typed boundaries, good error messages and tests that catch real bugs.',
+      motivation:
+        'I want to teach the whole loop, from typed boundaries through to running the thing in production.',
+      status: overrides?.status ?? 'PENDING',
+      ...(overrides?.status === 'REJECTED'
+        ? { decisionReason: 'Rejected by the test suite.', decidedAt: new Date() }
+        : {}),
     },
   });
 }
@@ -110,6 +184,8 @@ export async function registerAndLogin(email: string): Promise<ApiAgent> {
  */
 export async function createCourse(options?: {
   adminId?: string;
+  /** Alias for `adminId`, for tests where the owner is an instructor. */
+  ownerId?: string;
   status?: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
   lessonCount?: number;
   durationSeconds?: number;
@@ -119,7 +195,8 @@ export async function createCourse(options?: {
   category?: string;
   difficulty?: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED';
 }) {
-  const adminId = options?.adminId ?? (await createUser({ role: 'ADMIN' })).id;
+  const adminId =
+    options?.ownerId ?? options?.adminId ?? (await createUser({ role: 'ADMIN' })).id;
   const suffix = Math.random().toString(36).slice(2, 8);
   const title = options?.title ?? `Test Course ${suffix}`;
   const lessonCount = options?.lessonCount ?? 3;
@@ -129,7 +206,9 @@ export async function createCourse(options?: {
     data: {
       title,
       slug: options?.slug ?? `test-course-${suffix}`,
-      description: 'A course created by the test suite for assertions.',
+      description:
+        'A course created by the test suite for assertions. It is deliberately long enough to clear the eighty-character minimum the publish checklist applies to the full description.',
+      shortDescription: 'A course created by the test suite.',
       category: options?.category ?? 'Engineering',
       thumbnailUrl: '/thumbnails/test.svg',
       difficulty: options?.difficulty ?? 'BEGINNER',

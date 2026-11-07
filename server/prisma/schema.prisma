@@ -10,7 +10,7 @@
 //    out of sync with the lessons they summarise.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   // "native" covers local development on Windows/macOS/Linux; the musl target
   // is what the Alpine runtime image needs.
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
@@ -23,7 +23,74 @@ datasource db {
 
 enum Role {
   LEARNER
+  INSTRUCTOR
   ADMIN
+}
+
+/// Application lifecycle.  "Never applied" is the absence of a row, not a
+/// value here: one way to express a state is one fewer way for two sources of
+/// truth to disagree.
+enum InstructorApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+/// Instructor standing, deliberately separate from `Role`.  Suspension
+/// withdraws teaching capability without demoting the user, so their learner
+/// enrollments, progress and history are untouched by it.
+enum InstructorProfileStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum InstructorApplicationAction {
+  SUBMITTED
+  UPDATED
+  WITHDRAWN
+  APPROVED
+  REJECTED
+  NOTE_ADDED
+  SUSPENDED
+  REINSTATED
+}
+
+enum CourseEventType {
+  CREATED
+  PUBLISHED
+  UNPUBLISHED
+  ARCHIVED
+  LESSONS_ADDED
+}
+
+enum MediaKind {
+  VIDEO
+  IMAGE
+}
+
+/// An asset becomes READY only after the server has verified the stored
+/// object's real type from its magic bytes and read its duration.  Nothing
+/// plays a PENDING asset, which is what stops a half-uploaded file from
+/// reaching a learner.
+enum MediaStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+enum NotificationType {
+  APPLICATION_SUBMITTED
+  APPLICATION_RECEIVED
+  APPLICATION_APPROVED
+  APPLICATION_REJECTED
+  APPLICATION_WITHDRAWN
+  INSTRUCTOR_SUSPENDED
+  INSTRUCTOR_REINSTATED
+  COURSE_PUBLISHED
+  COURSE_UNPUBLISHED
+  COURSE_ARCHIVED
+  COURSE_LESSONS_ADDED
 }
 
 enum CourseStatus {
@@ -61,7 +128,17 @@ model User {
   passwordResets PasswordResetToken[]
   enrollments    Enrollment[]
   lessonProgress LessonProgress[]
-  createdCourses Course[]         @relation("CourseAuthor")
+  createdCourses Course[]             @relation("CourseAuthor")
+
+  instructorProfile      InstructorProfile?
+  instructorApplications InstructorApplication[]      @relation("ApplicationApplicant")
+  decidedApplications    InstructorApplication[]      @relation("ApplicationDecider")
+  applicationEvents      InstructorApplicationEvent[] @relation("ApplicationEventSubject")
+  actedApplicationEvents InstructorApplicationEvent[] @relation("ApplicationEventActor")
+  suspendedInstructors   InstructorProfile[]          @relation("InstructorSuspender")
+  courseEvents           CourseEvent[]
+  mediaAssets            MediaAsset[]
+  notifications          Notification[]
 
   @@index([role, isActive])
   @@map("users")
@@ -115,21 +192,42 @@ model Course {
   thumbnailUrl String       @db.VarChar(2048)
   difficulty   Difficulty
   status       CourseStatus @default(DRAFT)
+  /// The owner.  Named `createdById` from the first migration and kept: every
+  /// existing row already carries the right value, and the instructor feature
+  /// needs exactly these semantics.  Services refer to it as `ownerId`.
   createdById  String       @db.Uuid
   publishedAt  DateTime?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
+  /// --- instructor feature additions ------------------------------------
+  /// All defaulted so the migration applies cleanly to rows that already
+  /// exist: an empty string and empty arrays are what the old catalogue
+  /// effectively had, and the publish checklist is what requires them to be
+  /// filled in before a course can go live.
+  shortDescription   String   @default("") @db.VarChar(160)
+  learningObjectives String[] @default([])
+  prerequisites      String[] @default([])
+  targetAudience     String   @default("")
+  /// Set when the thumbnail was uploaded through the storage provider.
+  /// `thumbnailUrl` stays the rendered address either way, so the catalogue
+  /// needs no knowledge of where an image came from.
+  thumbnailAssetId   String?  @db.Uuid
+
   /// Restrict, not cascade: deleting the author must not silently delete the
   /// catalogue.  Deactivate the user instead.
-  createdBy   User         @relation("CourseAuthor", fields: [createdById], references: [id], onDelete: Restrict)
-  modules     Module[]
-  lessons     Lesson[]
-  enrollments Enrollment[]
+  createdBy      User          @relation("CourseAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+  thumbnailAsset MediaAsset?   @relation("CourseThumbnail", fields: [thumbnailAssetId], references: [id], onDelete: SetNull)
+  modules        Module[]
+  lessons        Lesson[]
+  enrollments    Enrollment[]
+  events         CourseEvent[]
 
   @@index([status, category])
   @@index([difficulty])
   @@index([createdById])
+  /// "My courses", filtered by tab — the instructor workspace's hottest query.
+  @@index([createdById, status])
   @@map("courses")
 }
 
@@ -147,16 +245,16 @@ model Module {
 }
 
 model Lesson {
-  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  moduleId    String  @db.Uuid
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  moduleId        String   @db.Uuid
   /// Denormalised from `module.courseId` so enrollment checks and course-wide
   /// progress counts are a single index hit.  Every write goes through
   /// LessonService, which keeps the two consistent.
-  courseId    String  @db.Uuid
-  title       String  @db.VarChar(140)
-  description String  @default("")
-  videoUrl    String  @db.VarChar(2048)
-  captionsUrl String? @db.VarChar(2048)
+  courseId        String   @db.Uuid
+  title           String   @db.VarChar(140)
+  description     String   @default("")
+  videoUrl        String   @db.VarChar(2048)
+  captionsUrl     String?  @db.VarChar(2048)
   /// Must be > 0 — enforced by Zod, and by a CHECK constraint added in the
   /// `lesson_duration_positive` migration so no raw write can break the
   /// completion maths that divides by it.
@@ -166,9 +264,15 @@ model Lesson {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  module   Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
-  course   Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  progress LessonProgress[]
+  /// Set when the video was uploaded rather than linked.  `videoUrl` stays
+  /// the external-URL field; exactly one of the two carries the lesson's
+  /// video, and the service decides which to serve.
+  videoAssetId String? @db.Uuid
+
+  module     Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  course     Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  videoAsset MediaAsset?      @relation("LessonVideo", fields: [videoAssetId], references: [id], onDelete: SetNull)
+  progress   LessonProgress[]
 
   @@unique([moduleId, order])
   @@index([courseId])
@@ -193,15 +297,17 @@ model Enrollment {
   @@unique([userId, courseId])
   @@index([userId, lastAccessedAt])
   @@index([courseId])
+  /// Drives the "enrollments over time" series and the 7-day counters.
+  @@index([courseId, enrolledAt])
   @@map("enrollments")
 }
 
 model LessonProgress {
-  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId   String @db.Uuid
-  lessonId String @db.Uuid
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String    @db.Uuid
+  lessonId             String    @db.Uuid
   /// Where the playhead was at the last save — drives "resume from".
-  lastPositionSeconds Int @default(0)
+  lastPositionSeconds  Int       @default(0)
   /// The furthest point ever reached; never decreases, so rewatching cannot
   /// reduce a learner's credit.
   maxWatchedSeconds    Int       @default(0)
@@ -217,5 +323,174 @@ model LessonProgress {
   @@unique([userId, lessonId])
   @@index([userId, updatedAt])
   @@index([lessonId])
+  /// Drives "completion rate per lesson", which counts completions per lesson
+  /// across the whole course.
+  @@index([lessonId, isCompleted])
   @@map("lesson_progress")
+}
+
+// ---------------------------------------------------------------------------
+// Instructor feature
+// ---------------------------------------------------------------------------
+
+/// A learner's request to teach.
+///
+/// A rejected applicant reapplies with a *new* row: the old one is history,
+/// never overwritten, so "past applications" on the admin screen is a real
+/// query rather than a guess.  At most one PENDING row per user is enforced
+/// by a partial unique index, written as raw SQL in the migration because
+/// Prisma cannot express a `WHERE` on an index.
+model InstructorApplication {
+  id                String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String                      @db.Uuid
+  professionalTitle String                      @db.VarChar(120)
+  expertise         String[]
+  experience        String
+  biography         String
+  motivation        String
+  /// Storage key, not a URL: the address is signed at read time.
+  profilePhotoKey   String?                     @db.VarChar(512)
+  portfolioUrl      String?                     @db.VarChar(2048)
+  status            InstructorApplicationStatus @default(PENDING)
+  submittedAt       DateTime                    @default(now())
+  decidedAt         DateTime?
+  decidedById       String?                     @db.Uuid
+  /// Shown to the applicant.  Required when rejecting; optional on approval.
+  decisionReason    String?
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  user      User                         @relation("ApplicationApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  decidedBy User?                        @relation("ApplicationDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  events    InstructorApplicationEvent[]
+
+  /// The admin queue: pending first, oldest first.
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("instructor_applications")
+}
+
+/// Append-only audit trail.
+///
+/// Every decision is a row here, never an overwritten `reviewNotes` field:
+/// who did what, when, from which status to which, and why.  Internal notes
+/// live here too and are filtered out of anything the applicant can read.
+model InstructorApplicationEvent {
+  id            String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Nullable so a suspension or reinstatement — which acts on the profile,
+  /// not on an application — still records against the user.
+  applicationId String?                      @db.Uuid
+  /// The person the event is about.
+  userId        String                       @db.Uuid
+  /// The person who performed it; the applicant themselves for SUBMITTED.
+  actorId       String                       @db.Uuid
+  action        InstructorApplicationAction
+  fromStatus    InstructorApplicationStatus?
+  toStatus      InstructorApplicationStatus?
+  /// Visible to the applicant.
+  reason        String?
+  /// Admins only.  Never serialised into an applicant-facing response.
+  internalNote  String?
+  createdAt     DateTime                     @default(now())
+
+  application InstructorApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user        User                   @relation("ApplicationEventSubject", fields: [userId], references: [id], onDelete: Cascade)
+  actor       User                   @relation("ApplicationEventActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId, createdAt])
+  @@index([userId, createdAt])
+  @@map("instructor_application_events")
+}
+
+/// The public face of an instructor, created from the application on approval.
+model InstructorProfile {
+  id               String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String                  @unique @db.Uuid
+  displayName      String                  @db.VarChar(120)
+  title            String                  @db.VarChar(120)
+  bio              String
+  photoKey         String?                 @db.VarChar(512)
+  status           InstructorProfileStatus @default(ACTIVE)
+  /// When the profile was created — "instructor since" on the admin table.
+  approvedAt       DateTime                @default(now())
+  suspendedAt      DateTime?
+  suspendedById    String?                 @db.Uuid
+  suspensionReason String?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  user        User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  suspendedBy User? @relation("InstructorSuspender", fields: [suspendedById], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@map("instructor_profiles")
+}
+
+/// Course lifecycle events.  These are what the activity feed reads, so the
+/// feed reports what actually happened rather than inferring it from
+/// timestamps on the course row.
+model CourseEvent {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId  String          @db.Uuid
+  actorId   String          @db.Uuid
+  type      CourseEventType
+  /// Free-form detail, e.g. how many lessons an edit added.
+  detail    String?
+  createdAt DateTime        @default(now())
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  actor  User   @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([courseId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("course_events")
+}
+
+/// An uploaded file.
+///
+/// Only the key and the metadata live in Postgres; the bytes are in object
+/// storage.  Putting video in the database would make every backup and every
+/// replica carry gigabytes that a signed URL serves better.
+model MediaAsset {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId         String      @db.Uuid
+  kind            MediaKind
+  storageKey      String      @unique @db.VarChar(512)
+  /// The type the *server* confirmed from the object's magic bytes, not the
+  /// type the client claimed.
+  mimeType        String      @db.VarChar(120)
+  sizeBytes       Int
+  durationSeconds Int?
+  originalName    String?     @db.VarChar(255)
+  status          MediaStatus @default(PENDING)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  owner            User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  lessons          Lesson[] @relation("LessonVideo")
+  courseThumbnails Course[] @relation("CourseThumbnail")
+
+  @@index([ownerId, kind])
+  /// Finds abandoned PENDING uploads for the cleanup job.
+  @@index([status, createdAt])
+  @@map("media_assets")
+}
+
+/// In-app notification.  Created in the same transaction as the event that
+/// causes it, so a user is never told about something that was rolled back.
+model Notification {
+  id        String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String           @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(160)
+  body      String
+  link      String?          @db.VarChar(512)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Serves both the unread badge and the newest-first dropdown.
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
 }
