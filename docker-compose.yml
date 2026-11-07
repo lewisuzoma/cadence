@@ -28,6 +28,48 @@ services:
       retries: 12
       start_period: 10s
 
+  # Object storage for lesson videos and images.
+  #
+  # Only used when STORAGE_DRIVER=s3.  The default is `local`, which needs
+  # no service at all — that is deliberate, so a reviewer gets working
+  # uploads from `docker compose up` without configuring anything.  Set
+  # STORAGE_DRIVER=s3 in .env to route uploads here instead.
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-cadence_minio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-cadence_minio_password}
+    volumes:
+      - miniodata:/data
+    ports:
+      # API, then the web console for poking at the bucket by hand.
+      - '${MINIO_PORT:-9000}:9000'
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot job: create the bucket the server expects.  MinIO has no
+  # "create on first write", so without this the first upload would fail on
+  # a clean volume.
+  minio-bucket:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: 'no'
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 '${S3_ACCESS_KEY:-cadence_minio}' '${S3_SECRET_KEY:-cadence_minio_password}' &&
+      mc mb --ignore-existing local/'${S3_BUCKET:-cadence-media}' &&
+      echo 'Bucket ${S3_BUCKET:-cadence-media} ready'
+      "
+
   # One-shot job: apply migrations, then run the idempotent seed.  Built from
   # the `builder` stage because that is the stage carrying the Prisma CLI and
   # tsx; the runtime image ships production dependencies only.
@@ -65,12 +107,25 @@ services:
       # See the note on the migrate service: the SPA's public URL differs
       # between the host and this stack, so Compose owns it.
       APP_URL: http://localhost:${CLIENT_PORT:-8080}
+      # Inside the network the endpoint is the service name, never
+      # localhost — the same rule as DATABASE_URL.
+      S3_ENDPOINT: http://minio:9000
+      STORAGE_LOCAL_DIR: /app/storage
+    volumes:
+      # Uploads under the local driver.  A named volume, so they survive a
+      # restart without being baked into the image.
+      - mediadata:/app/storage
     # Exposed for direct API pokes and /api/docs; the browser uses :8080.
     ports:
       - '${API_PORT:-4000}:4000'
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # Started but not waited on: with the default local driver MinIO is
+      # not needed at all, and a reviewer who never touches S3 should not
+      # have the API's startup gated on it.
+      minio:
+        condition: service_started
     healthcheck:
       # Returns 200 only after a real `SELECT 1` against Postgres succeeds.
       test:
@@ -144,6 +199,12 @@ services:
       COOKIE_SECURE: 'false'
       LOG_LEVEL: silent
       BCRYPT_COST: '4' # keep the suite fast; production uses 12
+      # The suite writes real files through the real driver — no mocked
+      # storage — into a tmpfs that disappears with the container.
+      STORAGE_DRIVER: local
+      STORAGE_LOCAL_DIR: /tmp/cadence-test-storage
+    tmpfs:
+      - /tmp/cadence-test-storage
     depends_on:
       db-test:
         condition: service_healthy
@@ -162,3 +223,5 @@ services:
 
 volumes:
   pgdata:
+  miniodata:
+  mediadata:

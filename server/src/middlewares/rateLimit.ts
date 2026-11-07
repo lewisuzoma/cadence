@@ -29,3 +29,19 @@ export const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 300,
 });
+
+/**
+ * Upload authorization: 30 per 10 minutes.
+ *
+ * Asking for an upload target is one cheap request for a client, but it
+ * reserves a database row and a storage key for us, so it is worth pacing
+ * on its own rather than leaving it to the broad API limiter. Keyed by
+ * user rather than IP, because several instructors behind one office NAT
+ * must not throttle each other.
+ */
+export const uploadLimiter = rateLimit({
+  ...shared,
+  windowMs: 10 * 60 * 1000,
+  limit: 30,
+  keyGenerator: (req) => req.user?.id ?? req.ip ?? 'anonymous',
+});

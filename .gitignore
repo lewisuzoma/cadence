@@ -17,3 +17,7 @@ playwright-report/
 docs/
 PLAN.md
 docs/design-notes.md
+
+# Uploaded media under the local storage driver.
+storage/
+

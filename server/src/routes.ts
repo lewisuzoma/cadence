@@ -9,6 +9,7 @@ import {
   adminUserQuerySchema,
   adminUserUpdateSchema,
   completeLessonSchema,
+  completeUploadSchema,
   courseInputSchema,
   courseQuerySchema,
   courseStatusUpdateSchema,
@@ -23,6 +24,7 @@ import {
   moduleUpdateSchema,
   notificationQuerySchema,
   paginationQuerySchema,
+  presignUploadSchema,
   progressQuerySchema,
   reinstateInstructorSchema,
   rejectApplicationSchema,
@@ -37,6 +39,7 @@ import {
   requireRole,
 } from './middlewares/authenticate.js';
 import { csrfProtection } from './middlewares/csrf.js';
+import { uploadLimiter } from './middlewares/rateLimit.js';
 import { asyncHandler } from './middlewares/errorHandler.js';
 import { validate } from './middlewares/validate.js';
 import { adminController } from './modules/admin/admin.controller.js';
@@ -48,6 +51,7 @@ import { enrollmentController } from './modules/enrollment/enrollment.controller
 import { instructorRouter } from './modules/instructor/instructor.routes.js';
 import { lessonsController } from './modules/lessons/lessons.controller.js';
 import { notificationsController } from './modules/notifications/notifications.controller.js';
+import { uploadsController } from './modules/uploads/uploads.controller.js';
 import { progressController } from './modules/progress/progress.controller.js';
 
 /**
@@ -198,6 +202,62 @@ apiRouter.post(
   authenticate,
   csrfProtection,
   asyncHandler(applicationsController.withdrawMine),
+);
+
+// --- uploads ---------------------------------------------------------------
+// Rate-limited separately from the rest of the API: asking for an upload
+// target is cheap for a client and reserves a row and a key for us, so it
+// is the one endpoint worth pacing per user rather than per route group.
+
+apiRouter.post(
+  '/uploads/presign',
+  authenticate,
+  csrfProtection,
+  requirePermission('media:upload'),
+  uploadLimiter,
+  validate({ body: presignUploadSchema }),
+  asyncHandler(uploadsController.presign),
+);
+
+apiRouter.post(
+  '/uploads/:id/complete',
+  authenticate,
+  csrfProtection,
+  requirePermission('media:upload'),
+  validate({ params: idParamSchema, body: completeUploadSchema }),
+  asyncHandler(uploadsController.complete),
+);
+
+apiRouter.delete(
+  '/uploads/:id',
+  authenticate,
+  csrfProtection,
+  requirePermission('media:upload'),
+  validate({ params: idParamSchema }),
+  asyncHandler(uploadsController.remove),
+);
+
+/*
+ * The local driver's receiving endpoint.  `express.json()` must not touch
+ * it, so it is mounted with a raw body reader; with STORAGE_DRIVER=s3 the
+ * browser never calls it and the handler answers 404.
+ */
+apiRouter.put(
+  '/uploads/by-key/:key/bytes',
+  authenticate,
+  csrfProtection,
+  requirePermission('media:upload'),
+  asyncHandler(uploadsController.putBytes),
+);
+
+/** Public images: course thumbnails and instructor photos. */
+apiRouter.get(/^\/media\/(.+)$/, asyncHandler(uploadsController.serveMedia));
+
+/** Lesson video, behind the lesson's own access check, with Range support. */
+apiRouter.get(
+  '/lessons/:id/video',
+  optionalAuthenticate,
+  asyncHandler(uploadsController.streamLessonVideo),
 );
 
 // --- notifications ---------------------------------------------------------

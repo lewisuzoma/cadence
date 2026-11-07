@@ -13,6 +13,7 @@ import { assertOwnsCourse, isPlatformAdmin } from '../../lib/ownership.js';
 import { prisma } from '../../lib/prisma.js';
 import type { AuthUser } from '../../middlewares/types.js';
 import { buildLessonSummary, indexBy } from '../courses/courses.projection.js';
+import { uploadsService } from '../uploads/uploads.service.js';
 import {
   notifyReopenedLearners,
   recalculateCourseEnrollments,
@@ -76,7 +77,53 @@ async function resolveAccess(
   throw new ForbiddenError('Enroll in this course to watch its lessons');
 }
 
+/**
+ * Where this lesson's video can actually be fetched from.
+ *
+ * Three cases: a READY upload with signed URLs available, a READY upload
+ * on a driver without them, and an external URL.
+ */
+async function resolvePlaybackUrl(lesson: {
+  id: string;
+  videoUrl: string;
+  videoAsset: { storageKey: string; status: string } | null;
+}): Promise<string> {
+  if (!lesson.videoAsset) return lesson.videoUrl;
+  if (lesson.videoAsset.status !== 'READY') return '';
+
+  const signed = await uploadsService.playbackUrlFor(lesson.videoAsset);
+  // No signed URL from this driver: stream it through the API, which
+  // checks access again on the way in.
+  return signed ?? `/api/v1/lessons/${lesson.id}/video`;
+}
+
 export const lessonsService = {
+  /**
+   * The storage key of a lesson's video, for the streaming endpoint, but
+   * only for a caller who may watch it.
+   *
+   * It reuses `resolveAccess` rather than re-stating the rule, so the
+   * stream and the player page can never disagree about who is allowed in.
+   */
+  async resolveVideoKey(lessonId: string, user: AuthUser | undefined): Promise<string | null> {
+    const lesson = await prisma.lesson.findUnique({
+      where: { id: lessonId },
+      select: {
+        id: true,
+        courseId: true,
+        isPreview: true,
+        videoAsset: { select: { storageKey: true, status: true } },
+      },
+    });
+    if (!lesson) throw new NotFoundError('Lesson');
+
+    // Throws 403/404 exactly as the player endpoint would.
+    await resolveAccess(lesson, user);
+
+    if (!lesson.videoAsset || lesson.videoAsset.status !== 'READY') return null;
+    return lesson.videoAsset.storageKey;
+  },
+
   /** The player payload, with sibling navigation across the whole course. */
   async getDetail(lessonId: string, user: AuthUser | undefined): Promise<LessonDetail> {
     const lesson = await prisma.lesson.findUnique({
@@ -84,6 +131,9 @@ export const lessonsService = {
       include: {
         module: { select: { id: true, title: true, order: true } },
         course: { select: { id: true, slug: true, title: true } },
+        videoAsset: {
+          select: { id: true, storageKey: true, status: true, durationSeconds: true },
+        },
       },
     });
     if (!lesson) throw new NotFoundError('Lesson');
@@ -108,9 +158,23 @@ export const lessonsService = {
       canView: access.canView,
     });
 
+    /*
+     * The playback address, resolved per request and never stored.
+     *
+     * An uploaded video is not public: with S3 this is a signed URL that
+     * expires in minutes, and on local disk it is our own streaming
+     * endpoint, which re-runs this very access check. Either way the
+     * caller has already passed `resolveAccess` above, so a URL is only
+     * ever minted for someone entitled to watch.
+     *
+     * An external https:// URL is passed through unchanged — there is
+     * nothing to sign, and that is the documented development path.
+     */
+    const videoUrl = await resolvePlaybackUrl(lesson);
+
     return {
       ...summary,
-      videoUrl: lesson.videoUrl,
+      videoUrl,
       captionsUrl: lesson.captionsUrl,
       module: lesson.module,
       course: lesson.course,
