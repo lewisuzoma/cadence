@@ -194,6 +194,11 @@ export const coursesRepository = {
             durationSeconds: true,
             order: true,
             isPreview: true,
+            // For the authoring UI's "Video ready / External URL / No
+            // video yet" chip.  Never the playback address itself.
+            videoUrl: true,
+            videoAssetId: true,
+            videoAsset: { select: { status: true } },
           },
         },
       },

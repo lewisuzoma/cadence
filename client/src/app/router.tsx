@@ -2,8 +2,14 @@ import { Suspense, lazy } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { FullPageSpinner } from '@/components/common/FullPageSpinner';
 import { AdminLayout, AppLayout } from '@/layouts/AppLayout';
+import { InstructorLayout } from '@/layouts/InstructorLayout';
 import { AuthLayout } from '@/layouts/AuthLayout';
-import { GuestRoute, ProtectedRoute, RoleRoute } from '@/routes/guards';
+import {
+  GuestRoute,
+  PermissionRoute,
+  ProtectedRoute,
+  RoleRoute,
+} from '@/routes/guards';
 import { CatalogPage } from '@/pages/CatalogPage';
 import { CourseDetailPage } from '@/pages/CourseDetailPage';
 import { DashboardPage } from '@/pages/DashboardPage';
@@ -50,6 +56,79 @@ const AdminLearnerDetailPage = lazy(() =>
   })),
 );
 
+/*
+ * The instructor workspace is code-split for the same reason the admin
+ * area is: it is a substantial amount of UI — charts, drag-and-drop, the
+ * uploader — that a learner never opens. Keeping it out of the main
+ * bundle costs one `Suspense` and saves every learner the download.
+ */
+const BecomeInstructorPage = lazy(() =>
+  import('@/pages/instructor/BecomeInstructorPage').then((m) => ({
+    default: m.BecomeInstructorPage,
+  })),
+);
+const ApplicationStatusPage = lazy(() =>
+  import('@/pages/instructor/ApplicationStatusPage').then((m) => ({
+    default: m.ApplicationStatusPage,
+  })),
+);
+const InstructorDashboardPage = lazy(() =>
+  import('@/pages/instructor/InstructorDashboardPage').then((m) => ({
+    default: m.InstructorDashboardPage,
+  })),
+);
+const MyCoursesPage = lazy(() =>
+  import('@/pages/instructor/MyCoursesPage').then((m) => ({ default: m.MyCoursesPage })),
+);
+const CourseFormPage = lazy(() =>
+  import('@/pages/instructor/CourseFormPage').then((m) => ({ default: m.CourseFormPage })),
+);
+const ManageLessonsPage = lazy(() =>
+  import('@/pages/instructor/ManageLessonsPage').then((m) => ({
+    default: m.ManageLessonsPage,
+  })),
+);
+const CoursePreviewPage = lazy(() =>
+  import('@/pages/instructor/CoursePreviewPage').then((m) => ({
+    default: m.CoursePreviewPage,
+  })),
+);
+const CourseAnalyticsPage = lazy(() =>
+  import('@/pages/instructor/CourseAnalyticsPage').then((m) => ({
+    default: m.CourseAnalyticsPage,
+  })),
+);
+const CourseLearnersPage = lazy(() =>
+  import('@/pages/instructor/CourseLearnersPage').then((m) => ({
+    default: m.CourseLearnersPage,
+  })),
+);
+const LearnerProgressPage = lazy(() =>
+  import('@/pages/instructor/LearnerProgressPage').then((m) => ({
+    default: m.LearnerProgressPage,
+  })),
+);
+const InstructorProfilePage = lazy(() =>
+  import('@/pages/instructor/InstructorProfilePage').then((m) => ({
+    default: m.InstructorProfilePage,
+  })),
+);
+const AdminApplicationsPage = lazy(() =>
+  import('@/pages/admin/AdminApplicationsPage').then((m) => ({
+    default: m.AdminApplicationsPage,
+  })),
+);
+const AdminApplicationDetailPage = lazy(() =>
+  import('@/pages/admin/AdminApplicationsPage').then((m) => ({
+    default: m.AdminApplicationDetailPage,
+  })),
+);
+const AdminInstructorsPage = lazy(() =>
+  import('@/pages/admin/AdminInstructorsPage').then((m) => ({
+    default: m.AdminInstructorsPage,
+  })),
+);
+
 /** Wraps a lazily loaded page so the chunk fetch has a visible fallback. */
 const lazyPage = (element: React.ReactNode) => (
   <Suspense fallback={<FullPageSpinner label="Loading" />}>{element}</Suspense>
@@ -89,7 +168,77 @@ export const router = createBrowserRouter([
               { path: '/courses/:slug/lessons/:lessonId', element: <LessonPage /> },
               { path: '/my-learning', element: <MyLearningPage /> },
               { path: '/profile', element: <ProfilePage /> },
+
+              // Applying is a learner activity, so it lives in the learner
+              // shell rather than the teaching one — which does not exist
+              // for the person filling this in.
+              {
+                path: '/become-an-instructor',
+                element: lazyPage(<BecomeInstructorPage />),
+              },
+              {
+                path: '/become-an-instructor/edit',
+                element: lazyPage(<BecomeInstructorPage />),
+              },
+              {
+                path: '/instructor-application',
+                element: lazyPage(<ApplicationStatusPage />),
+              },
+
               { path: '/403', element: <ForbiddenPage /> },
+            ],
+          },
+
+          // --- the teaching workspace -------------------------------------
+          // Guarded by capability, not role: a suspended instructor still
+          // reaches these routes and is shown the explanation page, while
+          // a learner is sent to 403.
+          {
+            element: <PermissionRoute require="instructor:dashboard" />,
+            children: [
+              {
+                element: <InstructorLayout />,
+                children: [
+                  { path: '/instructor', element: lazyPage(<InstructorDashboardPage />) },
+                  { path: '/instructor/courses', element: lazyPage(<MyCoursesPage />) },
+                  {
+                    path: '/instructor/courses/new',
+                    element: lazyPage(<CourseFormPage />),
+                  },
+                  {
+                    path: '/instructor/courses/:id',
+                    element: lazyPage(<CourseFormPage />),
+                  },
+                  {
+                    path: '/instructor/courses/:id/lessons',
+                    element: lazyPage(<ManageLessonsPage />),
+                  },
+                  {
+                    path: '/instructor/courses/:id/preview',
+                    element: lazyPage(<CoursePreviewPage />),
+                  },
+                  {
+                    path: '/instructor/analytics',
+                    element: lazyPage(<CourseAnalyticsPage />),
+                  },
+                  {
+                    path: '/instructor/courses/:id/analytics',
+                    element: lazyPage(<CourseAnalyticsPage />),
+                  },
+                  {
+                    path: '/instructor/courses/:id/learners',
+                    element: lazyPage(<CourseLearnersPage />),
+                  },
+                  {
+                    path: '/instructor/courses/:id/learners/:userId',
+                    element: lazyPage(<LearnerProgressPage />),
+                  },
+                  {
+                    path: '/instructor/profile',
+                    element: lazyPage(<InstructorProfilePage />),
+                  },
+                ],
+              },
             ],
           },
 
@@ -108,6 +257,18 @@ export const router = createBrowserRouter([
                     element: lazyPage(<AdminCourseEditorPage />),
                   },
                   { path: '/admin/learners', element: lazyPage(<AdminLearnersPage />) },
+                  {
+                    path: '/admin/instructor-applications',
+                    element: lazyPage(<AdminApplicationsPage />),
+                  },
+                  {
+                    path: '/admin/instructor-applications/:id',
+                    element: lazyPage(<AdminApplicationDetailPage />),
+                  },
+                  {
+                    path: '/admin/instructors',
+                    element: lazyPage(<AdminInstructorsPage />),
+                  },
                   { path: '/admin/learners/:id', element: lazyPage(<AdminLearnerDetailPage />) },
                   // The artifact's "Settings" nav item is the profile page.
                   { path: '/admin/settings', element: <ProfilePage /> },

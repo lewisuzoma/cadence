@@ -3,17 +3,22 @@ import { Link, NavLink, Outlet } from 'react-router-dom';
 import {
   Activity,
   BookOpen,
+  Clock,
   GraduationCap,
   LayoutDashboard,
   LogOut,
   Menu,
+  PauseCircle,
   Settings,
   ShieldCheck,
   Users,
 } from 'lucide-react';
-import { initials, fullName } from '@cadence/shared';
+import { can, canApplyToTeach, initials, fullName } from '@cadence/shared';
 import { Wordmark } from '@/components/common/Brand';
+import { NotificationBell } from '@/components/instructor/NotificationBell';
+import { WorkspaceSwitcher } from '@/components/instructor/WorkspaceSwitcher';
 import { MobileTabBar, MobileTabBarSpacer } from '@/components/layout/MobileTabBar';
+import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,6 +31,11 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { useLogout, useMe } from '@/features/auth/auth.queries';
+import {
+  useAdminApplications,
+  useMyApplication,
+} from '@/features/instructor/instructor.queries';
+import { useNotifications, useLivePermissions } from '@/features/notifications/notifications.queries';
 import { cn } from '@/lib/utils';
 
 /**
@@ -53,10 +63,27 @@ function navLinkClass({ isActive }: { isActive: boolean }) {
   );
 }
 
+/**
+ * The avatar menu, in the four account states from desktop artifact page 4
+ * and mobile board 4.
+ *
+ * Which state is shown is derived from `me` and the application status —
+ * never stored — so an approval that lands while the user is sitting on
+ * the page changes this menu on the next `me` refetch without a reload.
+ */
 export function UserMenu() {
   const { data: user } = useMe();
   const logout = useLogout();
+  // The status query is only meaningful for a signed-in user, and only a
+  // learner can have a pending application to report.
+  const { data: application } = useMyApplication(Boolean(user));
+
   if (!user) return null;
+
+  const pending = application?.status === 'PENDING';
+  const suspended = user.instructorStatus === 'SUSPENDED';
+  const teaches = can(user, 'instructor:dashboard');
+  const canApply = canApplyToTeach(user, pending);
 
   return (
     <DropdownMenu>
@@ -80,9 +107,76 @@ export function UserMenu() {
             <span className="block text-caption font-normal text-muted-foreground">
               {user.email}
             </span>
+            <span className="mt-1.5 flex flex-wrap items-center gap-1">
+              <Badge variant="secondary">Learner</Badge>
+              {suspended ? (
+                <Badge variant="ink">
+                  <PauseCircle aria-hidden="true" />
+                  Instructor suspended
+                </Badge>
+              ) : teaches ? (
+                <Badge variant="info">Instructor</Badge>
+              ) : null}
+            </span>
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+
+        {/* --- the state-dependent entry ---------------------------------
+            Exactly one of these four appears, and which one is a function
+            of the data rather than of anything remembered. */}
+        {canApply ? (
+          <DropdownMenuItem asChild>
+            <Link to="/become-an-instructor" className="text-primary-hover">
+              <GraduationCap aria-hidden="true" />
+              Become an Instructor
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
+
+        {pending ? (
+          <DropdownMenuItem asChild>
+            <Link to="/instructor-application">
+              <Clock aria-hidden="true" className="text-warning" />
+              <span className="flex-1">Application pending</span>
+              <Badge variant="warning">In review</Badge>
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
+
+        {suspended ? (
+          <DropdownMenuItem asChild>
+            <Link to="/instructor-application">
+              <PauseCircle aria-hidden="true" />
+              Why is teaching paused?
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
+
+        {teaches ? (
+          <>
+            <DropdownMenuItem asChild>
+              <Link to="/instructor">
+                <GraduationCap aria-hidden="true" />
+                Switch to Teaching
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/instructor/profile">
+                <Users aria-hidden="true" />
+                Instructor profile
+              </Link>
+            </DropdownMenuItem>
+          </>
+        ) : null}
+
+        <DropdownMenuItem asChild>
+          <Link to="/my-learning">
+            <BookOpen aria-hidden="true" />
+            My learning
+          </Link>
+        </DropdownMenuItem>
+
         <DropdownMenuItem asChild>
           <Link to="/profile">
             <Settings aria-hidden="true" />
@@ -109,6 +203,16 @@ export function UserMenu() {
 
 export function AppLayout() {
   const { data: user } = useMe();
+  const { data: application } = useMyApplication(Boolean(user));
+  const { data: notifications } = useNotifications({ pageSize: 10 });
+
+  // Re-reads `me` on focus and when a new notification arrives, so an
+  // approval or a suspension reaches this navigation without a reload.
+  useLivePermissions(notifications?.items.unreadCount);
+
+  const pending = application?.status === 'PENDING';
+  const teaches = can(user, 'instructor:dashboard');
+  const canApply = canApplyToTeach(user, pending);
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
@@ -119,6 +223,10 @@ export function AppLayout() {
       <header className="sticky top-0 z-30 h-17 border-b border-border bg-card/95 backdrop-blur">
         <div className="container flex h-17 items-center gap-4">
           <Wordmark to={user?.role === 'ADMIN' ? '/admin' : '/dashboard'} />
+
+          {/* An instructor gets the switcher here instead of a nav item,
+              which is how the artifact moves between the workspaces. */}
+          {teaches ? <WorkspaceSwitcher className="ml-2 max-lg:hidden" /> : null}
 
           <nav aria-label="Main" className="ml-4 hidden items-center gap-1 md:flex">
             {LEARNER_NAV.map((item) => (
@@ -131,9 +239,39 @@ export function AppLayout() {
                 Admin
               </NavLink>
             ) : null}
+
+            {/* The artifact's pill, which the nav shows only in the two
+                states where it means something. */}
+            {canApply ? (
+              <NavLink
+                to="/become-an-instructor"
+                className={({ isActive }) =>
+                  cn(
+                    'flex min-h-11 items-center gap-2 rounded-pill px-3.5 text-small font-semibold transition-colors',
+                    isActive
+                      ? 'bg-primary-tint text-primary-hover'
+                      : 'bg-primary-tint/60 text-primary-hover hover:bg-primary-tint',
+                  )
+                }
+              >
+                <GraduationCap className="size-4" aria-hidden="true" />
+                Become an Instructor
+              </NavLink>
+            ) : null}
+
+            {pending ? (
+              <NavLink
+                to="/instructor-application"
+                className="flex min-h-11 items-center gap-2 rounded-pill bg-warning-tint px-3.5 text-small font-semibold text-warning transition-colors hover:brightness-95"
+              >
+                <Clock className="size-4" aria-hidden="true" />
+                Application pending
+              </NavLink>
+            ) : null}
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            {user ? <NotificationBell /> : null}
             <UserMenu />
           </div>
         </div>
@@ -168,6 +306,25 @@ const ADMIN_NAV = [
 ];
 
 /**
+ * The instructor section of the admin sidebar, which the artifact prints
+ * under its own "INSTRUCTORS" heading (desktop pages 14–16).
+ */
+const ADMIN_INSTRUCTOR_NAV = [
+  {
+    to: '/admin/instructor-applications',
+    label: 'Applications',
+    icon: GraduationCap,
+    end: false,
+  },
+  {
+    to: '/admin/instructors',
+    label: 'Instructor management',
+    icon: Users,
+    end: false,
+  },
+];
+
+/**
  * The admin shell: a fixed 246px sidebar (measured from artifact pages 8–9)
  * with the ADMIN chip, the nav list, and "View learner site" plus "Sign out"
  * pinned to the bottom. Below `lg` it becomes a drawer — admin keeps the
@@ -177,6 +334,10 @@ export function AdminLayout() {
   const { data: user } = useMe();
   const logout = useLogout();
   const [menuOpen, setMenuOpen] = useState(false);
+  // The pending-review count beside "Applications", from the same query
+  // the page itself uses — so the badge and the tab can never disagree.
+  const applications = useAdminApplications({ status: 'PENDING', pageSize: 1 });
+  const pendingApplications = applications.data?.meta.total ?? 0;
 
   const nav = (
     <nav aria-label="Admin" className="flex flex-1 flex-col gap-1">
@@ -190,6 +351,27 @@ export function AdminLayout() {
         >
           <item.icon className="size-4" aria-hidden="true" />
           {item.label}
+        </NavLink>
+      ))}
+
+      <p className="mt-4 px-3 pb-1 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+        Instructors
+      </p>
+      {ADMIN_INSTRUCTOR_NAV.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          className={navLinkClass}
+          onClick={() => setMenuOpen(false)}
+        >
+          <item.icon className="size-4" aria-hidden="true" />
+          <span className="flex-1">{item.label}</span>
+          {item.to === '/admin/instructor-applications' && pendingApplications > 0 ? (
+            <span className="flex min-h-5 min-w-5 items-center justify-center rounded-full bg-warning px-1 font-mono text-caption text-warning-foreground">
+              {pendingApplications}
+            </span>
+          ) : null}
         </NavLink>
       ))}
     </nav>
@@ -246,10 +428,11 @@ export function AdminLayout() {
           </div>
         </header>
 
-        <div className="hidden h-17 shrink-0 items-center justify-end border-b border-border bg-card/95 px-8 lg:flex">
-          <span className="mr-3 text-caption text-muted-foreground">
+        <div className="hidden h-17 shrink-0 items-center justify-end gap-2 border-b border-border bg-card/95 px-8 lg:flex">
+          <span className="mr-1 text-caption text-muted-foreground">
             Signed in as {user ? fullName(user) : ''}
           </span>
+          <NotificationBell />
           <UserMenu />
         </div>
 

@@ -14,19 +14,46 @@ export function StatCard({
   value,
   hint,
   icon: Icon,
+  tone,
   className,
 }: {
   label: string;
   value: string | number;
   hint?: string;
   icon?: LucideIcon;
+  /**
+   * Tints the icon chip, as the instructor dashboard's cards do.
+   *
+   * Decoration only: the figure and its label carry the meaning, so a
+   * reader who cannot see the colour loses nothing.
+   */
+  tone?: 'success' | 'warning' | 'info';
   className?: string;
 }) {
+  const toneClass =
+    tone === 'success'
+      ? 'bg-success-tint text-success'
+      : tone === 'warning'
+        ? 'bg-warning-tint text-warning'
+        : tone === 'info'
+          ? 'bg-primary-tint text-primary-hover'
+          : 'bg-muted text-muted-foreground';
+
   return (
     <Card className={cn('flex flex-col gap-2 p-5', className)}>
       <div className="flex items-center justify-between gap-2">
         <p className="text-small font-semibold text-secondary-foreground">{label}</p>
-        {Icon ? <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" /> : null}
+        {Icon ? (
+          <span
+            className={cn(
+              'flex size-7 shrink-0 items-center justify-center rounded-md',
+              toneClass,
+            )}
+            aria-hidden="true"
+          >
+            <Icon className="size-4" />
+          </span>
+        ) : null}
       </div>
       <p className="text-display-sm tabular">{value}</p>
       {hint ? <p className="text-caption text-muted-foreground">{hint}</p> : null}

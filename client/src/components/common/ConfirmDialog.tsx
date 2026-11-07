@@ -28,6 +28,7 @@ export function ConfirmDialog({
   onConfirm,
   loading = false,
   error,
+  destructive = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -38,6 +39,14 @@ export function ConfirmDialog({
   onConfirm: () => void;
   loading?: boolean;
   error?: string | null;
+  /**
+   * Styles the confirm button as destructive.
+   *
+   * Reserved for actions that lose something — deleting, withdrawing,
+   * suspending — so the colour keeps meaning something. Publishing is a
+   * big action but not a destructive one, and is not styled this way.
+   */
+  destructive?: boolean;
 }) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -65,6 +74,11 @@ export function ConfirmDialog({
               onConfirm();
             }}
             disabled={loading}
+            className={
+              destructive
+                ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                : undefined
+            }
           >
             {loading ? 'Working...' : confirmLabel}
           </AlertDialogAction>

@@ -97,6 +97,7 @@ export const courseDetail: CourseDetail = {
           durationSeconds: 725,
           order: 1,
           isPreview: true,
+          videoKind: 'URL',
           status: 'IN_PROGRESS',
           progress: {
             lastPositionSeconds: 522,
@@ -116,6 +117,7 @@ export const courseDetail: CourseDetail = {
           durationSeconds: 1000,
           order: 2,
           isPreview: false,
+          videoKind: 'URL',
           status: 'NOT_STARTED',
           progress: null,
         },

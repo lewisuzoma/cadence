@@ -12,6 +12,7 @@ const lesson = (overrides: Partial<LessonSummary> & { id: string }): LessonSumma
   durationSeconds: 600,
   order: 1,
   isPreview: false,
+  videoKind: 'URL',
   status: 'NOT_STARTED',
   progress: null,
   ...overrides,

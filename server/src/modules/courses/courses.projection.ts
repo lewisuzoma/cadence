@@ -26,7 +26,26 @@ export type LessonRowForProjection = {
   durationSeconds: number;
   order: number;
   isPreview: boolean;
+  /** Present on authoring reads; absent on the learner-facing ones. */
+  videoUrl?: string;
+  videoAssetId?: string | null;
+  videoAsset?: { status: string } | null;
 };
+
+/**
+ * Which of the two video sources a lesson uses.
+ *
+ * An upload only counts once it is READY: a half-verified asset is not a
+ * video the authoring UI should report as present, and the publish
+ * checklist takes the same view.
+ */
+export function videoKindFor(lesson: LessonRowForProjection): 'UPLOAD' | 'URL' | 'NONE' {
+  if (lesson.videoAsset) {
+    return lesson.videoAsset.status === 'READY' ? 'UPLOAD' : 'NONE';
+  }
+  if (lesson.videoAssetId) return 'NONE';
+  return lesson.videoUrl && /^https:\/\//.test(lesson.videoUrl) ? 'URL' : 'NONE';
+}
 
 export function buildEnrollmentState(
   enrollment: Enrollment | undefined,
@@ -132,6 +151,7 @@ export function buildLessonSummary(
     durationSeconds: lesson.durationSeconds,
     order: lesson.order,
     isPreview: lesson.isPreview,
+    videoKind: videoKindFor(lesson),
     status: lessonStatus(progress, { canView: options.canView, isPreview: lesson.isPreview }),
     progress: progress
       ? {

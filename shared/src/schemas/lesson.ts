@@ -72,6 +72,15 @@ export const lessonSummarySchema = z.object({
   /** NOT_STARTED | IN_PROGRESS | COMPLETED | LOCKED — decided by the server. */
   status: z.enum(LESSON_STATUSES),
   progress: lessonProgressStateSchema.nullable(),
+  /**
+   * Where the lesson's video comes from, for the authoring UI's chip:
+   * a finished upload, an external URL, or nothing yet.
+   *
+   * Deliberately not the URL itself — a lesson list is shown to people who
+   * may have no right to play the video, and a playback address is minted
+   * per request by the lesson endpoint after its own access check.
+   */
+  videoKind: z.enum(['UPLOAD', 'URL', 'NONE']),
 });
 export type LessonSummary = z.infer<typeof lessonSummarySchema>;
 

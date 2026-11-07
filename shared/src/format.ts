@@ -54,3 +54,91 @@ export function fullName(user: { firstName: string; lastName: string }): string 
 export function initials(user: { firstName: string; lastName: string }): string {
   return `${user.firstName.charAt(0)}${user.lastName.charAt(0)}`.toUpperCase();
 }
+
+/**
+ * A short, human relative time: "12 min ago", "2 h ago", "Yesterday".
+ *
+ * Shared because the activity feed, the notification dropdown, the
+ * learners table and the dashboard all show the same kind of stamp, and
+ * three slightly different renderings of "40 minutes ago" on one screen
+ * looks like a bug even when each is individually correct.
+ *
+ * Past dates only, which is all this app has. Anything older than a week
+ * falls back to an absolute date, because "23 days ago" is harder to act
+ * on than "14 Oct".
+ */
+export function relativeTime(
+  value: string | Date,
+  now: Date = new Date(),
+): string {
+  const date = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return '';
+
+  const seconds = Math.round((now.getTime() - date.getTime()) / 1000);
+  if (seconds < 45) return 'Just now';
+  if (seconds < 90) return '1 min ago';
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+
+  // "Yesterday, 18:04" is how the artifact's activity feed reads.
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+
+  if (date >= startOfToday) {
+    return `Today, ${date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  }
+  if (date >= startOfYesterday) {
+    return `Yesterday, ${date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  }
+
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days} days ago`;
+
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  });
+}
+
+/** "5 Nov 2026" — the artifact's date format for tables and detail pages. */
+export function formatDate(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  const date = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+/** "5 Nov 2026, 14:02" — used where the time matters, as on decisions. */
+export function formatDateTime(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  const date = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return '—';
+  return `${formatDate(date)}, ${date.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })}`;
+}
+
+/** The viewer's timezone abbreviation, for charts that say which one they use. */
+export function timezoneLabel(): string {
+  try {
+    const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(
+      new Date(),
+    );
+    return parts.find((part) => part.type === 'timeZoneName')?.value ?? 'local time';
+  } catch {
+    return 'local time';
+  }
+}

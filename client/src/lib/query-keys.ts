@@ -1,8 +1,14 @@
 import type {
+  AdminApplicationQuery,
   AdminCourseQuery,
+  AdminInstructorQuery,
   AdminUserQuery,
+  CourseLearnerQuery,
   CourseQuery,
   EnrollmentQuery,
+  InstructorActivityQuery,
+  InstructorCourseQuery,
+  NotificationQuery,
 } from '@cadence/shared';
 
 /**
@@ -49,8 +55,40 @@ export const qk = {
     mine: (page: number) => [...qk.activity.all, 'mine', page] as const,
     platform: (page: number) => [...qk.activity.all, 'platform', page] as const,
   },
+  applications: {
+    all: ['applications'] as const,
+    /** The caller's own status — the one key the nav and the page share. */
+    mine: () => [...qk.applications.all, 'mine'] as const,
+  },
+  instructor: {
+    all: ['instructor'] as const,
+    dashboard: () => [...qk.instructor.all, 'dashboard'] as const,
+    courses: (filters: Partial<InstructorCourseQuery>) =>
+      [...qk.instructor.all, 'courses', filters] as const,
+    course: (id: string) => [...qk.instructor.all, 'course', id] as const,
+    checklist: (id: string) => [...qk.instructor.all, 'checklist', id] as const,
+    preview: (id: string) => [...qk.instructor.all, 'preview', id] as const,
+    activity: (filters: Partial<InstructorActivityQuery>) =>
+      [...qk.instructor.all, 'activity', filters] as const,
+    analytics: (courseId: string) => [...qk.instructor.all, 'analytics', courseId] as const,
+    learners: (courseId: string, filters: Partial<CourseLearnerQuery>) =>
+      [...qk.instructor.all, 'learners', courseId, filters] as const,
+    learner: (courseId: string, userId: string) =>
+      [...qk.instructor.all, 'learner', courseId, userId] as const,
+    profile: () => [...qk.instructor.all, 'profile'] as const,
+  },
+  notifications: {
+    all: ['notifications'] as const,
+    list: (filters: Partial<NotificationQuery>) =>
+      [...qk.notifications.all, 'list', filters] as const,
+  },
   admin: {
     all: ['admin'] as const,
+    applications: (filters: Partial<AdminApplicationQuery>) =>
+      [...qk.admin.all, 'applications', filters] as const,
+    application: (id: string) => [...qk.admin.all, 'application', id] as const,
+    instructors: (filters: Partial<AdminInstructorQuery>) =>
+      [...qk.admin.all, 'instructors', filters] as const,
     courses: (filters: Partial<AdminCourseQuery>) => [...qk.admin.all, 'courses', filters] as const,
     course: (id: string) => [...qk.admin.all, 'course', id] as const,
     users: (filters: Partial<AdminUserQuery>) => [...qk.admin.all, 'users', filters] as const,

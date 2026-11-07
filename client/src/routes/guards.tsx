@@ -1,6 +1,7 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import type { Role } from '@cadence/shared';
+import { can, type Permission, type Role } from '@cadence/shared';
 import { FullPageSpinner } from '@/components/common/FullPageSpinner';
+import { SuspendedInstructorPage } from '@/pages/instructor/SuspendedInstructorPage';
 import { useMe } from '@/features/auth/auth.queries';
 
 /**
@@ -45,6 +46,43 @@ export function RoleRoute({ allow }: { allow: Role[] }) {
   }
 
   return <Outlet />;
+}
+
+/**
+ * Requires a capability rather than a role.
+ *
+ * This is what every new route uses. `RoleRoute` could express "admins
+ * only", but it cannot express "an instructor, unless they are
+ * suspended" — and a suspended instructor is precisely the case this
+ * feature has to get right.
+ *
+ * A suspended instructor is shown the explanation page rather than a bare
+ * 403: they have not done anything wrong by clicking the link, their
+ * workspace genuinely used to be there, and the page tells them what
+ * happened and what still works.
+ *
+ * As with every guard here, this is navigation, not security. The server
+ * refuses the same requests independently.
+ */
+export function PermissionRoute({ require: permission }: { require: Permission }) {
+  const { data: user, isPending, isError } = useMe();
+  const location = useLocation();
+
+  if (isPending) return <FullPageSpinner label="Checking your access" />;
+
+  if (isError || !user) {
+    const next = `${location.pathname}${location.search}`;
+    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
+  }
+
+  if (can(user, permission)) return <Outlet />;
+
+  // Held the permission but for the suspension: explain, don't just refuse.
+  if (user.role === 'INSTRUCTOR' && user.instructorStatus === 'SUSPENDED') {
+    return <SuspendedInstructorPage />;
+  }
+
+  return <Navigate to="/403" replace state={{ from: location.pathname }} />;
 }
 
 /**

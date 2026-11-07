@@ -70,6 +70,19 @@ function readCookie(name: string): string | null {
  * here: the query client registers a cache-clearing callback at start-up.
  */
 let onUnauthenticated: (() => void) | undefined;
+/** Paths whose 401/403 implies the cached `me` may be out of date. */
+const PERMISSION_SENSITIVE = /^\/(instructor|uploads|admin)(\/|$)/;
+
+let onPermissionsChanged: (() => void) | undefined;
+
+/**
+ * Registered once by the app shell.  Called when an instructor endpoint
+ * refuses a request, so the UI can re-read `me` and correct itself.
+ */
+export function setPermissionsChangedHandler(handler: () => void): void {
+  onPermissionsChanged = handler;
+}
+
 export function setUnauthenticatedHandler(handler: () => void): void {
   onUnauthenticated = handler;
 }
@@ -195,6 +208,25 @@ async function send<T>(path: string, options: RequestOptions = {}): Promise<{ da
     }
     onUnauthenticated?.();
     redirectToLogin();
+  }
+
+  /*
+   * A 401 or 403 from an instructor endpoint means the server disagrees
+   * with what the UI believes about this user's permissions — typically
+   * because an admin approved or suspended them a moment ago.
+   *
+   * Re-reading `me` is what turns that disagreement into a correct screen:
+   * the navigation, the guards and the workspace switcher all follow it,
+   * so a suspended instructor lands on the "access suspended" page rather
+   * than staring at a dead button. This is the third of the three refetch
+   * triggers the spec asks for; the other two are window focus and a new
+   * notification, both in `useLivePermissions`.
+   */
+  if (
+    (response.status === 401 || response.status === 403) &&
+    PERMISSION_SENSITIVE.test(path)
+  ) {
+    onPermissionsChanged?.();
   }
 
   return parse<T>(response);

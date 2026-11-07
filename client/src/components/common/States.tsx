@@ -93,6 +93,33 @@ export function ErrorState({
   );
 }
 
+/**
+ * The generic loading state for a whole page region.
+ *
+ * Announced politely rather than silently: a screen-reader user otherwise
+ * meets an empty main landmark with no explanation of why.  Pages with a
+ * distinctive shape use a skeleton instead, which communicates the layout
+ * as well as the wait.
+ */
+export function LoadingState({
+  label = 'Loading',
+  className,
+}: {
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <Card
+      className={cn('flex flex-col items-center gap-4 px-6 py-14 text-center', className)}
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <span className="size-7 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />
+      <p className="text-small text-secondary-foreground">{label}…</p>
+    </Card>
+  );
+}
+
 /** The 403 state: signed in as a learner, ask an administrator for access. */
 export function ForbiddenState({ className }: { className?: string }) {
   return (

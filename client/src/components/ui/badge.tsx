@@ -26,6 +26,13 @@ const badgeVariants = cva(
         destructive: 'border-transparent bg-destructive-tint text-destructive',
         /** Selected / published — Cobalt tint #EAEEFF */
         info: 'border-transparent bg-primary-tint text-primary-hover',
+        /**
+         * Ink, for the states the artifact prints as a solid dark pill:
+         * "Published" on a course card and "Instructor suspended" in the
+         * profile menu.  Dark rather than red because suspension is a
+         * state, not an error the viewer can fix from here.
+         */
+        ink: 'border-transparent bg-foreground text-background',
       },
     },
     defaultVariants: { variant: 'default' },
