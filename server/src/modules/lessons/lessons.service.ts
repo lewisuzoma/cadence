@@ -13,6 +13,10 @@ import { assertOwnsCourse, isPlatformAdmin } from '../../lib/ownership.js';
 import { prisma } from '../../lib/prisma.js';
 import type { AuthUser } from '../../middlewares/types.js';
 import { buildLessonSummary, indexBy } from '../courses/courses.projection.js';
+import {
+  notifyReopenedLearners,
+  recalculateCourseEnrollments,
+} from './lessons.recalculate.js';
 
 /**
  * Lessons and modules.
@@ -230,7 +234,13 @@ export const lessonsService = {
         'Learners have watched lessons in this module. Remove the lessons individually or archive the course instead.',
       );
     }
-    await prisma.module.delete({ where: { id: moduleId } });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.module.delete({ where: { id: moduleId } });
+      // No progress was attached to these lessons, but the course's lesson
+      // count still moved, so the enrollments still need rechecking.
+      await recalculateCourseEnrollments(tx, existing.courseId);
+    });
   },
 
   // --- authoring: lessons ------------------------------------------------
@@ -254,19 +264,60 @@ export const lessonsService = {
     });
     if (clash) throw new ConflictError('Another lesson already uses that position');
 
-    return prisma.lesson.create({
-      data: {
-        moduleId,
-        // Denormalised, and only ever set from the module's own courseId.
-        courseId: module.courseId,
-        title: input.title,
-        description: input.description,
-        videoUrl: input.videoUrl,
-        ...(input.captionsUrl ? { captionsUrl: input.captionsUrl } : {}),
-        durationSeconds: input.durationSeconds,
-        isPreview: input.isPreview,
-        order,
-      },
+    /*
+     * Adding a lesson changes the denominator of every learner's progress
+     * on this course. Anyone who had finished it has not finished the new
+     * version, so their enrollment reopens — in the same transaction, so
+     * there is no window in which the course has more lessons than the
+     * enrollments know about.
+     */
+    return prisma.$transaction(async (tx) => {
+      const lesson = await tx.lesson.create({
+        data: {
+          moduleId,
+          // Denormalised, and only ever set from the module's own courseId.
+          courseId: module.courseId,
+          title: input.title,
+          description: input.description,
+          videoUrl: input.videoUrl,
+          ...(input.captionsUrl ? { captionsUrl: input.captionsUrl } : {}),
+          ...(input.videoAssetId ? { videoAssetId: input.videoAssetId } : {}),
+          durationSeconds: input.durationSeconds,
+          isPreview: input.isPreview,
+          order,
+        },
+      });
+
+      const { reopened } = await recalculateCourseEnrollments(tx, module.courseId);
+
+      if (reopened.length > 0) {
+        const course = await tx.course.findUniqueOrThrow({
+          where: { id: module.courseId },
+          select: { title: true, slug: true },
+        });
+        await notifyReopenedLearners(
+          tx,
+          {
+            courseId: module.courseId,
+            courseTitle: course.title,
+            courseSlug: course.slug,
+            addedLessons: 1,
+          },
+          reopened,
+        );
+        await tx.courseEvent.create({
+          data: {
+            courseId: module.courseId,
+            actorId: actor.id,
+            type: 'LESSONS_ADDED',
+            detail: `Reopened ${reopened.length} completed enrollment${
+              reopened.length === 1 ? '' : 's'
+            }`,
+          },
+        });
+      }
+
+      return lesson;
     });
   },
 
@@ -293,6 +344,13 @@ export const lessonsService = {
         ...(input.description !== undefined ? { description: input.description } : {}),
         ...(input.videoUrl !== undefined ? { videoUrl: input.videoUrl } : {}),
         ...(input.captionsUrl !== undefined ? { captionsUrl: input.captionsUrl } : {}),
+        ...(input.videoAssetId !== undefined
+          ? {
+              videoAsset: input.videoAssetId
+                ? { connect: { id: input.videoAssetId } }
+                : { disconnect: true },
+            }
+          : {}),
         ...(input.durationSeconds !== undefined
           ? { durationSeconds: input.durationSeconds }
           : {}),
@@ -302,16 +360,30 @@ export const lessonsService = {
     });
   },
 
+  /**
+   * Deletes a lesson and brings every affected enrollment back in line.
+   *
+   * The LessonProgress rows cascade with the lesson, which is what makes
+   * the recalculation necessary rather than merely tidy: a learner who had
+   * three of four lessons done may now have three of three, and their
+   * enrollment has to say COMPLETED. Both happen in one transaction.
+   */
   async deleteLesson(lessonId: string, actor: AuthUser): Promise<void> {
     const existing = await prisma.lesson.findUnique({
       where: { id: lessonId },
-      select: { id: true, course: { select: { createdById: true } } },
+      select: {
+        id: true,
+        courseId: true,
+        course: { select: { createdById: true } },
+      },
     });
     if (!existing) throw new NotFoundError('Lesson');
     assertOwnsCourse(existing.course, actor, 'Lesson');
-    // Progress rows cascade with the lesson; course percentages recompute from
-    // whatever lessons remain, so no stored total goes stale.
-    await prisma.lesson.delete({ where: { id: lessonId } });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.lesson.delete({ where: { id: lessonId } });
+      await recalculateCourseEnrollments(tx, existing.courseId);
+    });
   },
 
   /**

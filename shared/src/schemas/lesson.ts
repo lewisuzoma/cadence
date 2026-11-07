@@ -31,6 +31,13 @@ export const lessonInputSchema = z.object({
   durationSeconds: durationSecondsSchema,
   isPreview: z.boolean().default(false),
   order: z.number().int().min(1).optional(),
+  /**
+   * The id of an uploaded, verified video, if the lesson has one.
+   *
+   * Exactly one of this and `videoUrl` carries the lesson's video: an
+   * upload once it is READY, or an external https:// URL. `null` clears it.
+   */
+  videoAssetId: uuidSchema.nullable().optional(),
 });
 export type LessonInput = z.infer<typeof lessonInputSchema>;
 

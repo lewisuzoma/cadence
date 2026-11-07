@@ -7,7 +7,7 @@ import {
   slugSchema,
   uuidSchema,
 } from './common.js';
-import { publicInstructorSchema } from './instructor.js';
+import { previewStateSchema, publicInstructorSchema } from './instructor.js';
 import { lessonSummarySchema } from './lesson.js';
 
 export const courseCategorySchema = z
@@ -138,3 +138,15 @@ export const courseDetailSchema = courseSummarySchema.extend({
   createdBy: z.object({ id: uuidSchema, firstName: z.string(), lastName: z.string() }).nullable(),
 });
 export type CourseDetail = z.infer<typeof courseDetailSchema>;
+
+/**
+ * A course rendered as a learner would see it, for its owner or an admin.
+ *
+ * The same `CourseDetail` the learner gets, with the preview banner's state
+ * alongside it — not a parallel shape, so the preview cannot drift from the
+ * real page.
+ */
+export const coursePreviewSchema = courseDetailSchema.extend({
+  preview: previewStateSchema,
+});
+export type CoursePreview = z.infer<typeof coursePreviewSchema>;

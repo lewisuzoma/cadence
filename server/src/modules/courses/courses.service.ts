@@ -5,6 +5,7 @@ import type {
   CourseQuery,
   CourseStatus,
   CourseSummary,
+  CoursePreview,
   CourseUpdateInput,
   ModuleWithLessons,
   PublishCheck,
@@ -326,6 +327,38 @@ export const coursesService = {
       lessonCount: aggregate?.lessonCount ?? 0,
       totalDuration: aggregate?.totalDuration ?? 0,
     });
+  },
+
+  /**
+   * The course exactly as a learner would see it, for its owner or an admin.
+   *
+   * Three properties make this a real preview rather than a different page:
+   *
+   *  - it works at any status, so a draft can be reviewed before publishing;
+   *  - it needs no enrollment, and creates none;
+   *  - **nothing watched here is recorded.** `lessonsService.resolveAccess`
+   *    returns `isTracked: false` for the owner, so the player writes no
+   *    progress rows and the course's own analytics stay clean of its
+   *    author's viewing.
+   *
+   * It reuses `getDetail` rather than assembling a parallel payload, which
+   * is what guarantees the preview and the learner view cannot diverge.
+   */
+  async preview(id: string, actor: AuthUser): Promise<CoursePreview> {
+    const course = await coursesRepository.findById(id);
+    assertOwnsCourse(course, actor);
+
+    const detail = await this.getDetail(id, actor);
+    return {
+      ...detail,
+      preview: {
+        isPreview: true,
+        courseStatus: course.status,
+        // The banner's second line: "Draft · not in catalog".
+        inCatalog: course.status === 'PUBLISHED',
+        progressTracked: false,
+      },
+    };
   },
 
   /**

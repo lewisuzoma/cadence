@@ -1,7 +1,12 @@
 import type { Request, Response } from 'express';
-import { instructorActivityQuerySchema, instructorCourseQuerySchema } from '@cadence/shared';
+import {
+  instructorActivityQuerySchema,
+  instructorCourseQuerySchema,
+  instructorProfileUpdateSchema,
+} from '@cadence/shared';
 import { ok } from '../../lib/response.js';
 import { coursesService } from '../courses/courses.service.js';
+import { instructorProfileService } from './profile.service.js';
 import { instructorService } from './instructor.service.js';
 
 /**
@@ -30,6 +35,24 @@ export const instructorController = {
     const query = instructorActivityQuerySchema.parse(req.query);
     const { items, meta } = await instructorService.activity(query, req.user!);
     ok(res, 'Activity retrieved', items, meta);
+  },
+
+  async preview(req: Request, res: Response): Promise<void> {
+    const data = await coursesService.preview(req.params.id!, req.user!);
+    ok(res, 'Course preview retrieved', data);
+  },
+
+  // --- instructor profile ------------------------------------------------
+
+  async getProfile(req: Request, res: Response): Promise<void> {
+    const data = await instructorProfileService.getMine(req.user!);
+    ok(res, 'Instructor profile retrieved', data);
+  },
+
+  async updateProfile(req: Request, res: Response): Promise<void> {
+    const input = instructorProfileUpdateSchema.parse(req.body);
+    const data = await instructorProfileService.updateMine(input, req.user!);
+    ok(res, 'Instructor profile updated', data);
   },
 
   async publish(req: Request, res: Response): Promise<void> {

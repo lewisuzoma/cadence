@@ -287,7 +287,18 @@ model Enrollment {
   enrolledAt     DateTime         @default(now())
   lastAccessedAt DateTime?
   lastLessonId   String?          @db.Uuid
+  /// When the learner currently counts as finished.  Cleared if the course
+  /// grows new lessons, because they are no longer finished with it.
   completedAt    DateTime?
+  /// When they *first* finished, kept forever.
+  ///
+  /// Separate from `completedAt` because the two answer different
+  /// questions: `completedAt` is "are they done now?", which the dashboards
+  /// and the activity feed count, while this is "did they ever finish?",
+  /// which must survive an instructor adding a lesson afterwards.  Without
+  /// it, reopening an enrollment would quietly erase the fact that the
+  /// learner had completed the course.
+  firstCompletedAt DateTime?
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Restrict: a course with learners cannot be deleted (the API answers 409

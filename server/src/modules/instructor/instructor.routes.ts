@@ -6,6 +6,7 @@ import {
   idParamSchema,
   instructorActivityQuerySchema,
   instructorCourseQuerySchema,
+  instructorProfileUpdateSchema,
   lessonInputSchema,
   lessonUpdateSchema,
   moduleInputSchema,
@@ -90,6 +91,33 @@ instructorRouter.get(
   requirePermission('instructor:dashboard'),
   validate({ params: idParamSchema }),
   asyncHandler(coursesController.publishChecklist),
+);
+
+/*
+ * Preview sits on `instructor:dashboard`, like the other reads: a suspended
+ * instructor can still look at their own course, they just cannot change it.
+ */
+instructorRouter.get(
+  '/courses/:id/preview',
+  requirePermission('instructor:dashboard'),
+  validate({ params: idParamSchema }),
+  asyncHandler(instructorController.preview),
+);
+
+// --- instructor profile ----------------------------------------------------
+// Always the caller's own; there is no id in the path to point elsewhere.
+
+instructorRouter.get(
+  '/profile',
+  requirePermission('instructor:dashboard'),
+  asyncHandler(instructorController.getProfile),
+);
+
+instructorRouter.patch(
+  '/profile',
+  requirePermission('course:manage-own'),
+  validate({ body: instructorProfileUpdateSchema }),
+  asyncHandler(instructorController.updateProfile),
 );
 
 instructorRouter.patch(

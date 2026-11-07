@@ -600,3 +600,23 @@ export const mediaAssetSchema = z.object({
   createdAt: z.string(),
 });
 export type MediaAsset = z.infer<typeof mediaAssetSchema>;
+
+// ---------------------------------------------------------------------------
+// Course preview
+// ---------------------------------------------------------------------------
+
+/**
+ * The learner view of a course, plus the banner state the preview needs.
+ *
+ * Declared in `course.ts` rather than here would be circular, so the preview
+ * flag lives on its own and `CoursePreview` is assembled in `course.ts`.
+ */
+export const previewStateSchema = z.object({
+  isPreview: z.literal(true),
+  courseStatus: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']),
+  /** Drives "Draft · not in catalog" beside the banner. */
+  inCatalog: z.boolean(),
+  /** Always false. Stated explicitly so the player can disable tracking. */
+  progressTracked: z.literal(false),
+});
+export type PreviewState = z.infer<typeof previewStateSchema>;

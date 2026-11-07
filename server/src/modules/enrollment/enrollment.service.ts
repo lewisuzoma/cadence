@@ -60,9 +60,23 @@ export const enrollmentService = {
   async enroll(userId: string, courseId: string): Promise<EnrollResult> {
     const course = await prisma.course.findUnique({
       where: { id: courseId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, createdById: true },
     });
     if (!course) throw new NotFoundError('Course');
+
+    /*
+     * An author cannot enroll in their own course.
+     *
+     * Not a formality: an owner's enrollment would appear in their own
+     * learner counts, drag their own completion rate around, and show up in
+     * the enrolled-learners table as if they were a student. Preview exists
+     * for exactly this, and it creates nothing.
+     */
+    if (course.createdById === userId) {
+      throw new UnprocessableError(
+        'You cannot enroll in your own course. Use Preview to see it as a learner would.',
+      );
+    }
 
     const existing = await prisma.enrollment.findUnique({
       where: { userId_courseId: { userId, courseId } },
