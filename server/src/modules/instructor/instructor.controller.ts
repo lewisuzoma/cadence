@@ -3,6 +3,7 @@ import {
   instructorActivityQuerySchema,
   instructorCourseQuerySchema,
   instructorProfileUpdateSchema,
+  publishCourseSchema,
 } from '@cadence/shared';
 import { ok } from '../../lib/response.js';
 import { coursesService } from '../courses/courses.service.js';
@@ -55,8 +56,27 @@ export const instructorController = {
     ok(res, 'Instructor profile updated', data);
   },
 
+  /** The draft-versus-live state, for the editor's banner and history. */
+  async draftState(req: Request, res: Response): Promise<void> {
+    const data = await coursesService.draftState(req.params.id!, req.user!);
+    ok(res, 'Draft state retrieved', data);
+  },
+
+  /**
+   * Publishes the draft as a new version.
+   *
+   * The same verb whether the course is going live for the first time or
+   * the instructor is shipping edits to one that already is: both freeze
+   * the draft and point learners at it.
+   */
   async publish(req: Request, res: Response): Promise<void> {
-    const course = await coursesService.setStatus(req.params.id!, 'PUBLISHED', req.user!);
+    const { changeSummary } = publishCourseSchema.parse(req.body ?? {});
+    const course = await coursesService.setStatus(
+      req.params.id!,
+      'PUBLISHED',
+      req.user!,
+      changeSummary,
+    );
     ok(res, 'Course published', course);
   },
 

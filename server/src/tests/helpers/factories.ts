@@ -29,6 +29,7 @@ export async function resetDb(): Promise<void> {
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE "notifications", "course_events", "instructor_application_events",
                    "instructor_applications", "instructor_profiles",
+                   "course_version_lessons", "course_versions",
                    "lesson_progress", "enrollments", "lessons", "modules",
                    "courses", "media_assets", "refresh_tokens",
                    "password_reset_tokens", "users"
@@ -238,6 +239,57 @@ export async function createCourse(options?: {
         },
       }),
     );
+  }
+
+  /*
+   * A published course must have a live version, because that is what
+   * learners read. Creating one here keeps the factory faithful to what
+   * the publish flow actually produces — without it, a fixture would be
+   * in a state the application can never reach, and the tests would be
+   * exercising a course the catalogue cannot show.
+   *
+   * ARCHIVED courses get one too: they were published once, and their
+   * enrolled learners still read that version.
+   */
+  const status = options?.status ?? 'PUBLISHED';
+  if (status === 'PUBLISHED' || status === 'ARCHIVED') {
+    const version = await prisma.courseVersion.create({
+      data: {
+        courseId: course.id,
+        version: 1,
+        title: course.title,
+        shortDescription: course.shortDescription,
+        description: course.description,
+        category: course.category,
+        difficulty: course.difficulty,
+        thumbnailUrl: course.thumbnailUrl,
+        learningObjectives: course.learningObjectives,
+        prerequisites: course.prerequisites,
+        targetAudience: course.targetAudience,
+        publishedById: adminId,
+      },
+    });
+
+    if (lessons.length > 0) {
+      await prisma.courseVersionLesson.createMany({
+        data: lessons.map((lesson) => ({
+          versionId: version.id,
+          lessonId: lesson.id,
+          moduleTitle: module.title,
+          moduleOrder: module.order,
+          title: lesson.title,
+          description: lesson.description,
+          durationSeconds: lesson.durationSeconds,
+          order: lesson.order,
+          isPreview: lesson.isPreview,
+        })),
+      });
+    }
+
+    await prisma.course.update({
+      where: { id: course.id },
+      data: { liveVersionId: version.id },
+    });
   }
 
   return { course, module, lessons, adminId };

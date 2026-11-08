@@ -95,6 +95,28 @@ which would confirm it exists.
    capability, their enrollments and all their progress. Their published
    courses leave the catalog, and learners already enrolled keep full access.
 
+### Publishing and versions
+
+A course has a **draft** (what the instructor edits) and a **published
+version** (what learners see). They are not the same thing, which is the
+point: an instructor can rewrite a lesson on a live course without anyone
+watching it noticing until they publish.
+
+- Publishing freezes the draft as version 1, 2, 3… Learners read the live
+  version; the editor shows the draft.
+- An edit to a live course raises an **unpublished changes** banner
+  listing what a learner would notice, and the card in My courses says so
+  too.
+- Publishing again ships those changes as the next version, with an
+  optional note saying what changed. The history is kept.
+- **Progress survives.** A version points at lessons by id rather than
+  copying them, so renaming a lesson a hundred people have completed
+  leaves all hundred completions intact.
+- A lesson added to a live course is invisible to learners — and
+  unreachable even by URL — until the next publish.
+- **Deleting a lesson is immediate**, because it also deletes learners'
+  progress on it, and that cannot be half-deferred.
+
 ### URLs
 
 | What | Where |
@@ -276,6 +298,13 @@ Whatever the driver:
 - Lesson videos are not public. The lesson endpoint returns a short-lived
   signed URL (or streams through the API on the local driver), and only
   after the normal access check. Seeking works through HTTP Range.
+- **Large uploads are resumable.** Above `UPLOAD_MULTIPART_THRESHOLD_MB`
+  the file is sliced into parts and each is sent separately, so a dropped
+  connection costs one part rather than the whole transfer. A failed part
+  is retried with backoff; if the whole attempt fails, re-picking the same
+  file resumes from where it stopped rather than starting again. The
+  server matches the file by `name|size|lastModified` so two different
+  videos can never be stitched together from each other's parts.
 - With no storage configured at all, external `https://` video URLs still
   work, which is the documented path for development and demos.
 - Allowed formats: `mp4` and `webm` for video, `jpg`/`png`/`webp` for
@@ -326,6 +355,8 @@ secrets.
 | `MAX_VIDEO_MB` | no | `2048` | Checked before issuing an upload URL, and again against the bytes that arrive |
 | `MAX_IMAGE_MB` | no | `5` | As above |
 | `SIGNED_URL_TTL_SECONDS` | no | `900` | Lifetime of a signed upload or playback URL |
+| `UPLOAD_MULTIPART_THRESHOLD_MB` | no | `16` | Above this, a file is uploaded in parts so a dropped connection costs one part rather than the whole transfer |
+| `UPLOAD_PART_SIZE_MB` | no | `8` | Part size. S3 requires at least 5 MB for every part but the last |
 
 The server validates all of this with Zod at boot and **exits** on anything
 invalid, rather than failing on the first request. Choosing
@@ -358,10 +389,10 @@ Every response uses one envelope:
 | Applications | `POST /instructor-applications`, `GET|PATCH /instructor-applications/me`, `POST /instructor-applications/me/withdraw` |
 | Admin — instructors | `GET /admin/instructor-applications`, `GET /admin/instructor-applications/:id`, `POST …/:id/approve`, `POST …/:id/reject`, `POST …/:id/notes`, `GET /admin/instructors`, `POST /admin/instructors/:id/suspend`, `POST /admin/instructors/:id/reinstate` |
 | Instructor workspace | `GET /instructor/dashboard`, `/instructor/courses`, `/instructor/activity`, `GET|PATCH /instructor/profile` |
-| Instructor courses | `POST /instructor/courses`, `GET|PATCH|DELETE /instructor/courses/:id`, `POST …/:id/publish`, `…/unpublish`, `…/archive`, `GET …/:id/preview`, `GET …/:id/publish-checklist` |
+| Instructor courses | `POST /instructor/courses`, `GET|PATCH|DELETE /instructor/courses/:id`, `POST …/:id/publish`, `…/unpublish`, `…/archive`, `GET …/:id/preview`, `GET …/:id/publish-checklist`, `GET …/:id/draft-state` |
 | Instructor lessons | `POST /instructor/courses/:id/modules`, `PATCH|DELETE /instructor/modules/:id`, `POST /instructor/modules/:id/lessons`, `PATCH|DELETE /instructor/lessons/:id`, `PATCH /instructor/modules/:id/lessons/reorder` |
 | Instructor analytics | `GET /instructor/courses/:id/analytics`, `GET /instructor/courses/:id/learners`, `GET /instructor/courses/:id/learners/:userId/progress` |
-| Uploads | `POST /uploads/presign`, `POST /uploads/:id/complete`, `DELETE /uploads/:id`, `GET /media/*`, `GET /lessons/:id/video` |
+| Uploads | `POST /uploads/presign`, `POST /uploads/:id/complete`, `DELETE /uploads/:id`, `GET /uploads/:id/status`, `POST /uploads/:id/parts`, `PUT /uploads/multipart/:uploadId/parts/:n`, `GET /media/*`, `GET /lessons/:id/video` |
 | Notifications | `GET /notifications`, `POST /notifications/:id/read`, `POST /notifications/read-all` |
 
 Authentication is cookie-based: login sets an httpOnly access cookie (15

@@ -597,6 +597,49 @@ short-lived signed URL (S3) or points at the API's own streaming endpoint
 page cannot disagree about who may watch. HTTP Range is supported so seeking
 works.
 
+### Resumable uploads
+
+Above `UPLOAD_MULTIPART_THRESHOLD_MB` (16 by default) the file is sent in
+parts. The win is simple: a dropped connection costs one part rather than
+the whole transfer, and on a 2 GB video that is the difference between a
+usable feature and an unusable one.
+
+Both drivers implement it — S3 through its native multipart API, the local
+driver by staging part files under `.multipart/<uploadId>/` and
+concatenating them on completion. The local staging lives beside the
+storage root rather than in the OS temp directory precisely so a part
+written before a container restart is still there afterwards.
+
+**The provider is the source of truth for which parts have landed**, not
+our database. With S3 the browser PUTs straight to the bucket and the API
+never sees the parts, so `ListParts` is the only answer that cannot be
+stale — and it means there is no parts table to drift out of step with
+storage.
+
+Resuming works in two layers:
+
+- **Within an attempt**: a part that fails is retried with exponential
+  backoff, up to four times, without disturbing the parts around it. Three
+  parts travel at once; an unbounded fan-out of 256 requests would be
+  throttled by the browser anyway and would make the progress bar
+  meaningless.
+- **Across attempts**: the client sends a fingerprint of the chosen file
+  (`name|size|lastModified`) with the presign request. If the server finds
+  an unfinished upload of the same file it hands that one back along with
+  the parts already stored, and only the rest are sent. The fingerprint is
+  what stops two *different* videos of the same size being stitched
+  together from each other's parts — a test covers exactly that.
+
+Completion refuses a gap. A truncated file would still pass the magic-byte
+check, because the header is in part 1, and would then fail to play; so
+every part must be present before the object is assembled.
+
+Cancelling aborts the multipart upload as well as deleting the row.
+That matters beyond tidiness: S3 charges for orphaned parts indefinitely
+and they do not appear in a normal bucket listing, so an upload abandoned
+without an abort is a bill nobody can see. The orphan-cleanup job aborts
+them too.
+
 Presign requests are rate-limited **per user, not per IP**, so several
 instructors behind one office NAT do not throttle each other.
 
@@ -612,6 +655,77 @@ The bell polls every 60 s and on window focus. Polling rather than
 websockets: one small request a minute is far less machinery for a feature
 whose latency requirement is "within a minute or so".
 
+## Course content versioning
+
+**The Course row is the instructor's draft; a `CourseVersion` is what
+learners see.**
+
+Before this, correcting a typo and restructuring a curriculum were the
+same operation, and both landed on learners mid-lesson. Now an instructor
+can work on the next revision of a live course and decide when it ships.
+
+### The snapshot references lessons, it does not copy them
+
+`CourseVersion` holds the course's presentation — title, descriptions,
+category, difficulty, thumbnail, objectives, prerequisites, audience —
+frozen at publish time. `CourseVersionLesson` holds how each lesson was
+presented, and points at the **live lesson row by id**.
+
+That indirection is the whole design. `LessonProgress` is keyed by
+`lessonId`, so duplicating lesson rows per version would orphan every
+learner's history on each publish. Instead a lesson is one row with one
+identity, and a version records how it was described — which means an
+instructor can rename a lesson after a hundred people have completed it
+and all hundred completions survive.
+
+### What a learner sees
+
+| Read | Source |
+|---|---|
+| Catalog list, search and category filter | the live version |
+| Course detail, its module tree and lesson list | the live version |
+| A single lesson, including whether it is a free preview | the live version |
+| Previous / next navigation in the player | the live version |
+| Everything an instructor or admin sees | the draft |
+
+Searching the draft would have been the easy mistake: a learner typing
+the title they can see would find nothing the moment its author started
+editing, and a half-written draft title would become searchable before
+anyone published it.
+
+An unpublished lesson is a **404, not a 403**, even with its id in hand.
+Without that, versioning would be cosmetic — the course page would hide
+the lesson while a bookmarked URL still played it.
+
+### What is deliberately *not* deferred
+
+**Deleting a lesson takes effect at once.** It also deletes every
+learner's progress on that lesson, and there is no honest way to defer
+half of that; the snapshot row cascades with it. A published curriculum
+getting shorter is better than one listing a lesson nobody can play. The
+pending-changes list therefore never reports a removal — the code that
+would detect one is kept as a guard, and documented as normally empty.
+
+### Pending changes
+
+`draftState` returns a list of what a learner would notice, not a
+boolean, because the instructor's question is never "is something
+different?" but "what changes if I publish?". A reorder is reported once
+rather than per lesson: moving one lesson up is one change, not five.
+
+The course cards use a cheaper proxy — `updatedAt` later than the live
+version's `publishedAt` — because running a field-by-field diff per card
+to draw a badge would be wasteful. A false positive there costs a banner
+that then lists no changes; it can never hide a real one.
+
+### Migration
+
+Every already-published course was snapshotted as version 1 at migration
+time, with a guard that fails the migration if any published course is
+left without one. Without that backfill, every published course would
+have vanished from the catalogue the moment this deployed, taking its
+enrolled learners' access with it.
+
 ## Decisions and trade-offs — instructor feature
 
 | Decision | Alternative | Why |
@@ -621,10 +735,14 @@ whose latency requirement is "within a minute or so".
 | No `tokenVersion` column | bump a version on every role change | `authenticate` already re-read the user row per request; adding the profile status to that read gives the same guarantee with no new column to keep in step. |
 | `instructor:apply` not inherited | make it additive like everything else | Matches the brief's capability table, and makes the CTA disappear without a role check at each render site. |
 | `Enrollment.firstCompletedAt` as a new column | keep `completedAt` set while reopening | `completedAt IS NOT NULL` is read as "done now" by the dashboards and the activity feed; keeping it set would count a reopened learner as finished. |
-| Edits to a published course go live immediately | a draft/published copy per course | Versioned content is a feature in its own right — two copies of every lesson, a diff UI, and a rule for what an enrolled learner sees mid-course. Out of scope here; the trade-off is that a learner can see a typo being fixed under them. |
+| A version snapshots presentation and *references* lessons | copy the lesson rows per version | Progress is keyed by `lessonId`. Copying lesson rows would orphan every learner's history on each publish. |
+| Deleting a lesson is immediate, not deferred to publish | defer deletion like every other change | Deletion also removes learners' progress, which cannot honestly be deferred. A shorter published curriculum beats one listing an unplayable lesson. |
+| Course cards use `updatedAt` vs `publishedAt` as the "has changes" proxy | run the full diff per card | A field-by-field diff per card to draw a badge is wasteful; a false positive costs an empty banner, never a missed change. |
 | A suspended instructor's courses are **hidden from the catalog**, and enrolled learners keep access | leave them visible | The brief's recommendation. It stops a suspended instructor gaining new learners without punishing the ones already there. |
 | Local disk is the **default** storage driver | require S3/MinIO | A reviewer must get working uploads from one command. S3 is one env var away. |
 | Charts as CSS rather than a charting library | Recharts | For four charts of this shape it is less code, renders instantly, and the numbers stay real text a screen reader and find-in-page can read. Each also has a table view. |
+| Resume keyed on a file fingerprint, not a cookie or a server session | a per-tab upload id | A browser cannot re-read a `File` across a reload, so resuming after one means the user re-picks the file. The fingerprint is what proves it is the same file. |
+| The provider lists the uploaded parts, rather than a `MediaUploadPart` table | track parts in Postgres | With S3 the API never sees the parts, so a table could only ever be a guess that drifts from the bucket. |
 | Reordering offers drag **and** explicit arrow buttons | drag plus a keyboard sensor | A keyboard sensor still requires discovering that a handle is draggable. Two visible arrows require no discovery and are what a screen-reader user finds. |
 | Notification polling at 60 s | websockets / SSE | Far less machinery for a one-minute latency requirement. |
 | The dialog's lesson form allows saving without a video | require one | The artifact says so explicitly ("You can save now and add the video later"); the publish checklist is what stops such a lesson reaching a learner. |

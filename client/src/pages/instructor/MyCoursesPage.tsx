@@ -93,8 +93,13 @@ function CourseCard({
           loading="lazy"
           className="size-full object-cover"
         />
-        <span className="absolute left-3 top-3">
+        <span className="absolute left-3 top-3 flex flex-wrap gap-1.5">
           <StatusBadge status={course.status} />
+          {/* The point of saying it here: an instructor should not have
+              to open a course to find out they left changes unpublished. */}
+          {course.hasUnpublishedChanges ? (
+            <Badge variant="warning">Unpublished changes</Badge>
+          ) : null}
         </span>
       </div>
 
@@ -119,6 +124,7 @@ function CourseCard({
             {course.enrolledLearners} learner{course.enrolledLearners === 1 ? '' : 's'}
           </span>
           <span>Created {formatDate(course.createdAt)}</span>
+          {course.liveVersion ? <span>Live: v{course.liveVersion}</span> : null}
         </p>
 
         {/* The artifact's activity strip: last-7-days enrollments and the
@@ -208,13 +214,13 @@ function CourseCard({
 
               {/* Each transition appears only where it is legal. */}
               {course.status === 'DRAFT' ? (
-                <DropdownMenuItem onClick={() => status.mutate('publish')}>
+                <DropdownMenuItem onClick={() => status.mutate({ action: 'publish' })}>
                   <Upload aria-hidden="true" />
                   Publish…
                 </DropdownMenuItem>
               ) : null}
               {course.status === 'PUBLISHED' ? (
-                <DropdownMenuItem onClick={() => status.mutate('unpublish')}>
+                <DropdownMenuItem onClick={() => status.mutate({ action: 'unpublish' })}>
                   <Pencil aria-hidden="true" />
                   Unpublish (back to draft)
                 </DropdownMenuItem>
@@ -374,7 +380,7 @@ export function MyCoursesPage() {
         destructive
         loading={archive.isPending}
         onConfirm={() => {
-          archive.mutate('archive', { onSuccess: () => setConfirmArchive(null) });
+          archive.mutate({ action: 'archive' }, { onSuccess: () => setConfirmArchive(null) });
         }}
       />
 

@@ -6,7 +6,9 @@ import type {
   CourseStatus,
   CourseSummary,
   CoursePreview,
+  CourseDraftState,
   CourseUpdateInput,
+  LessonSummary,
   ModuleWithLessons,
   PublishCheck,
   PublishChecklist,
@@ -25,6 +27,7 @@ import { prisma } from '../../lib/prisma.js';
 import { isUuid, uniqueCourseSlug } from '../../lib/slug.js';
 import type { AuthUser } from '../../middlewares/types.js';
 import { mediaUrlForKey } from '../../lib/media-url.js';
+import { courseVersions, type LiveCourseContent } from './courses.versions.js';
 import { notifyArchivedLearners } from '../lessons/lessons.recalculate.js';
 import { notificationsService } from '../notifications/notifications.service.js';
 import {
@@ -32,12 +35,14 @@ import {
   buildLessonSummary,
   buildPublicInstructor,
   indexBy,
+  isPlayableVideoUrl,
 } from './courses.projection.js';
 import {
   courseListSelect,
   coursesRepository,
   type CourseListRow,
 } from './courses.repository.js';
+import type { LessonRowForProjection } from './courses.projection.js';
 
 /**
  * Course business rules.
@@ -53,13 +58,28 @@ import {
 type ListResult = { items: CourseSummary[]; meta: ReturnType<typeof buildMeta> };
 
 /** Attaches lesson aggregates (and the caller's progress) to course rows. */
-async function decorate(rows: CourseListRow[], userId?: string): Promise<CourseSummary[]> {
+/**
+ * Turns course rows into catalog cards.
+ *
+ * `published: true` makes the card show the **live version** rather than
+ * the instructor's draft — so an instructor rewriting a title does not
+ * change what the catalogue says until they publish. The management
+ * views pass `false` and see their own work in progress.
+ */
+async function decorate(
+  rows: CourseListRow[],
+  userId?: string,
+  options: { published?: boolean } = {},
+): Promise<CourseSummary[]> {
   const ids = rows.map((row) => row.id);
-  const [aggregates, enrollments, completed, instructors] = await Promise.all([
+  const [aggregates, enrollments, completed, instructors, liveContent] = await Promise.all([
     coursesRepository.aggregateLessons(ids),
     userId ? coursesRepository.findEnrollmentsForCourses(userId, ids) : Promise.resolve([]),
     userId ? coursesRepository.completedLessonsByCourse(userId, ids) : Promise.resolve([]),
     coursesRepository.publicInstructorsForCourses(ids),
+    options.published
+      ? courseVersions.liveForCourses(ids)
+      : Promise.resolve(new Map<string, LiveCourseContent>()),
   ]);
 
   const aggregateByCourse = indexBy(aggregates, (row) => row.courseId);
@@ -69,10 +89,17 @@ async function decorate(rows: CourseListRow[], userId?: string): Promise<CourseS
 
   return rows.map((course) => {
     const aggregate = aggregateByCourse.get(course.id);
+    const live = liveContent.get(course.id);
+
     return buildCourseSummary({
-      course,
-      lessonCount: aggregate?.lessonCount ?? 0,
-      totalDuration: aggregate?.totalDuration ?? 0,
+      // The published presentation wins where there is one; the draft's
+      // row is the fallback for the management views and for a course
+      // that has never been published.
+      course: live ? { ...course, ...liveOverlay(live) } : course,
+      lessonCount: live ? live.lessons.length : (aggregate?.lessonCount ?? 0),
+      totalDuration: live
+        ? live.lessons.reduce((sum, lesson) => sum + lesson.durationSeconds, 0)
+        : (aggregate?.totalDuration ?? 0),
       enrollment: enrollmentByCourse.get(course.id),
       completedLessons: completedByCourse.get(course.id)?.completed ?? 0,
       instructor: buildPublicInstructor(
@@ -81,6 +108,76 @@ async function decorate(rows: CourseListRow[], userId?: string): Promise<CourseS
       ),
     });
   });
+}
+
+/**
+ * Regroups a published version's flat lesson list back into modules.
+ *
+ * A lesson whose row has since been deleted is skipped: the snapshot row
+ * cascades with it, but a concurrent delete between the two reads would
+ * otherwise leave a lesson in the list that cannot be played.
+ */
+function groupVersionLessons(
+  live: LiveCourseContent,
+  draftLessonsById: Map<string, LessonRowForProjection>,
+  progressByLesson: Map<string, LessonProgress>,
+  canView: boolean,
+): ModuleWithLessons[] {
+  const byModule = new Map<number, { title: string; lessons: LessonSummary[] }>();
+
+  for (const snapshot of live.lessons) {
+    const row = draftLessonsById.get(snapshot.lessonId);
+    if (!row) continue;
+
+    const group = byModule.get(snapshot.moduleOrder) ?? {
+      title: snapshot.moduleTitle,
+      lessons: [],
+    };
+
+    group.lessons.push(
+      buildLessonSummary(
+        {
+          // The snapshot's presentation, over the live row's identity and
+          // its video — so a retitled lesson keeps its progress.
+          ...row,
+          title: snapshot.title,
+          description: snapshot.description,
+          durationSeconds: snapshot.durationSeconds,
+          order: snapshot.order,
+          isPreview: snapshot.isPreview,
+        },
+        progressByLesson.get(snapshot.lessonId),
+        { canView },
+      ),
+    );
+    byModule.set(snapshot.moduleOrder, group);
+  }
+
+  return [...byModule.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([order, group]) => ({
+      // Versions have no module ids of their own; the order is the
+      // stable key within a published curriculum.
+      id: `v${live.version}-m${order}`,
+      title: group.title,
+      order,
+      lessons: group.lessons,
+    }));
+}
+
+/** The fields a published version overrides on the draft row. */
+function liveOverlay(live: LiveCourseContent) {
+  return {
+    title: live.title,
+    shortDescription: live.shortDescription,
+    description: live.description,
+    category: live.category,
+    difficulty: live.difficulty,
+    thumbnailUrl: live.thumbnailUrl,
+    learningObjectives: live.learningObjectives,
+    prerequisites: live.prerequisites,
+    targetAudience: live.targetAudience,
+  };
 }
 
 export const coursesService = {
@@ -95,7 +192,7 @@ export const coursesService = {
       sort: query.sort,
     });
 
-    const items = await decorate(rows, userId);
+    const items = await decorate(rows, userId, { published: true });
     // `duration` is a derived column, so this page is ordered after decoration.
     if (query.sort === 'duration') {
       items.sort((a, b) => b.estimatedDuration - a.estimatedDuration);
@@ -155,7 +252,15 @@ export const coursesService = {
       throw new NotFoundError('Course');
     }
 
-    const [modules, aggregates, progressRows, instructors] = await Promise.all([
+    /*
+     * Which curriculum to show.
+     *
+     * A learner sees the **published version**: the instructor may be
+     * halfway through adding three lessons, and those must not appear in
+     * someone's course page before they are published. The owner and
+     * admins see the live draft, because that is what they are editing.
+     */
+    const [modules, aggregates, progressRows, instructors, live] = await Promise.all([
       coursesRepository.findModulesWithLessons(course.id),
       coursesRepository.aggregateLessons([course.id]),
       user
@@ -164,6 +269,7 @@ export const coursesService = {
           })
         : Promise.resolve([] as LessonProgress[]),
       coursesRepository.publicInstructorsForCourses([course.id]),
+      privileged ? Promise.resolve(null) : courseVersions.live(course.id),
     ]);
 
     const progressByLesson = indexBy(progressRows, (row) => row.lessonId);
@@ -171,20 +277,39 @@ export const coursesService = {
     const completedLessons = progressRows.filter((row) => row.isCompleted).length;
     const aggregate = aggregates[0];
 
-    const projectedModules: ModuleWithLessons[] = modules.map((module) => ({
-      id: module.id,
-      title: module.title,
-      order: module.order,
-      lessons: module.lessons.map((lesson) =>
-        buildLessonSummary(lesson, progressByLesson.get(lesson.id), { canView }),
-      ),
-    }));
+    /*
+     * The draft's module tree, or the published snapshot's.
+     *
+     * The snapshot stores its grouping flat — a version records the
+     * module a lesson *was* in, because modules are editable too — so it
+     * is regrouped here into the same shape the draft produces. The
+     * lesson rows themselves are looked up live by id, because that is
+     * what carries the video and what progress is keyed to.
+     */
+    const draftLessonsById = new Map(
+      modules.flatMap((module) => module.lessons).map((lesson) => [lesson.id, lesson]),
+    );
+
+    const projectedModules: ModuleWithLessons[] = live
+      ? groupVersionLessons(live, draftLessonsById, progressByLesson, canView)
+      : modules.map((module) => ({
+          id: module.id,
+          title: module.title,
+          order: module.order,
+          lessons: module.lessons.map((lesson) =>
+            buildLessonSummary(lesson, progressByLesson.get(lesson.id), { canView }),
+          ),
+        }));
 
     const instructorProfile = instructors[0]?.profile;
+    const liveLessonCount = live?.lessons.length ?? 0;
+    const liveDuration =
+      live?.lessons.reduce((sum, lesson) => sum + lesson.durationSeconds, 0) ?? 0;
+
     const summary = buildCourseSummary({
-      course,
-      lessonCount: aggregate?.lessonCount ?? 0,
-      totalDuration: aggregate?.totalDuration ?? 0,
+      course: live ? { ...course, ...liveOverlay(live) } : course,
+      lessonCount: live ? liveLessonCount : (aggregate?.lessonCount ?? 0),
+      totalDuration: live ? liveDuration : (aggregate?.totalDuration ?? 0),
       enrollment: enrollment ?? undefined,
       completedLessons,
       instructor: buildPublicInstructor(
@@ -196,9 +321,9 @@ export const coursesService = {
     return {
       ...summary,
       modules: projectedModules,
-      learningObjectives: course.learningObjectives,
-      prerequisites: course.prerequisites,
-      targetAudience: course.targetAudience,
+      learningObjectives: live ? live.learningObjectives : course.learningObjectives,
+      prerequisites: live ? live.prerequisites : course.prerequisites,
+      targetAudience: live ? live.targetAudience : course.targetAudience,
       createdBy: course.createdBy
         ? {
             id: course.createdBy.id,
@@ -364,6 +489,36 @@ export const coursesService = {
   },
 
   /**
+   * How the draft differs from what learners see.
+   *
+   * The editor's "unpublished changes" banner and the version history
+   * both read this, so the instructor can tell at a glance whether the
+   * course they are looking at is the one the world has.
+   */
+  async draftState(id: string, actor: AuthUser): Promise<CourseDraftState> {
+    const course = await prisma.course.findUnique({
+      where: { id },
+      select: { id: true, createdById: true, liveVersionId: true },
+    });
+    assertOwnsCourse(course, actor);
+
+    const [pendingChanges, history] = await Promise.all([
+      courseVersions.pendingChanges(id),
+      courseVersions.history(id),
+    ]);
+    const liveEntry = history.find((entry) => entry.isLive);
+
+    return {
+      courseId: id,
+      liveVersion: liveEntry?.version ?? null,
+      livePublishedAt: liveEntry?.publishedAt ?? null,
+      hasUnpublishedChanges: pendingChanges.length > 0,
+      pendingChanges,
+      history,
+    };
+  },
+
+  /**
    * Evaluates every publishing rule and reports all of them.
    *
    * Deliberately not fail-fast: the editor shows this as a checklist, and an
@@ -402,11 +557,11 @@ export const coursesService = {
       }),
     ]);
 
-    /** A lesson is playable with a READY upload or a usable external URL. */
+    /** A lesson is playable with a READY upload or a usable URL. */
     const isPlayable = (lesson: (typeof lessons)[number]): boolean =>
       lesson.videoAsset
         ? lesson.videoAsset.status === 'READY'
-        : /^https:\/\/\S+$/.test(lesson.videoUrl);
+        : isPlayableVideoUrl(lesson.videoUrl);
 
     const withoutVideo = lessons.filter((lesson) => !isPlayable(lesson));
     const withoutDuration = lessons.filter((lesson) => lesson.durationSeconds <= 0);
@@ -497,6 +652,7 @@ export const coursesService = {
     id: string,
     status: CourseStatus,
     actor: AuthUser,
+    changeSummary?: string,
   ): Promise<CourseSummary> {
     const existing = await coursesRepository.findById(id);
     assertOwnsCourse(existing, actor);
@@ -508,6 +664,21 @@ export const coursesService = {
     }
 
     const course = await prisma.$transaction(async (tx) => {
+      /*
+       * Publishing freezes the draft as a new version, and that is what
+       * learners then see. Re-publishing an already-live course is the
+       * same operation: it is how an instructor ships the edits they
+       * have been making without anyone watching the course noticing
+       * until they decide.
+       */
+      if (status === 'PUBLISHED') {
+        await courseVersions.publish(tx, {
+          courseId: id,
+          actorId: actor.id,
+          ...(changeSummary ? { changeSummary } : {}),
+        });
+      }
+
       const updated = await tx.course.update({
         where: { id },
         data: {

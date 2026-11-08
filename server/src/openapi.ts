@@ -21,6 +21,7 @@ import {
   changePasswordSchema,
   completeLessonSchema,
   courseDetailSchema,
+  courseDraftStateSchema,
   courseInputSchema,
   courseQuerySchema,
   courseStatusUpdateSchema,
@@ -50,6 +51,8 @@ import {
   loginSchema,
   mediaAssetSchema,
   moduleInputSchema,
+  partTargetsRequestSchema,
+  partTargetsResponseSchema,
   myApplicationSchema,
   notificationListSchema,
   notificationQuerySchema,
@@ -57,6 +60,7 @@ import {
   presignedUploadSchema,
   progressResultSchema,
   publishChecklistSchema,
+  publishCourseSchema,
   registerSchema,
   reinstateInstructorSchema,
   rejectApplicationSchema,
@@ -64,6 +68,7 @@ import {
   resetPasswordSchema,
   saveProgressSchema,
   suspendInstructorSchema,
+  uploadStatusSchema,
   adminDashboardSchema,
   userSchema,
 } from '@cadence/shared';
@@ -228,9 +233,10 @@ get('/instructor/activity', { tag: 'Instructor', summary: 'Enrollments, lesson c
 mutate('post', '/instructor/courses', { tag: 'Instructor', summary: 'Create a course. It starts as a DRAFT and the owner is taken from the session.', body: courseInputSchema, response: courseSummarySchema, status: 201 });
 get('/instructor/courses/{id}', { tag: 'Instructor', summary: "One of the caller's courses, at any status. Another instructor's course answers 404, not 403.", response: courseDetailSchema, secure: true });
 get('/instructor/courses/{id}/publish-checklist', { tag: 'Instructor', summary: 'Every publishing rule and whether it passes', response: publishChecklistSchema, secure: true });
+get('/instructor/courses/{id}/draft-state', { tag: 'Instructor', summary: 'How the draft differs from the version learners see, plus the published history. The Course row is the draft; a CourseVersion is what the catalog shows.', response: courseDraftStateSchema, secure: true });
 mutate('patch', '/instructor/courses/{id}', { tag: 'Instructor', summary: 'Update a course. Owner and status cannot be set through this path.', body: courseUpdateSchema, response: courseSummarySchema });
 mutate('delete', '/instructor/courses/{id}', { tag: 'Instructor', summary: 'Delete a course that has no enrollments. 409 with "archive instead" otherwise.' });
-mutate('post', '/instructor/courses/{id}/publish', { tag: 'Instructor', summary: 'Publish. 422 listing every failing checklist rule if it is not ready.', response: courseSummarySchema });
+mutate('post', '/instructor/courses/{id}/publish', { tag: 'Instructor', summary: 'Freeze the draft as a new version and point learners at it. The same verb for a first release and for shipping edits to a live course. 422 lists every failing checklist rule if it is not ready.', body: publishCourseSchema, response: courseSummarySchema });
 mutate('post', '/instructor/courses/{id}/unpublish', { tag: 'Instructor', summary: 'Move back to DRAFT. Enrollments and progress are untouched; new enrollments are blocked.', response: courseSummarySchema });
 mutate('post', '/instructor/courses/{id}/archive', { tag: 'Instructor', summary: 'Archive. Enrolled learners keep access; the course leaves the catalog.', response: courseSummarySchema });
 mutate('post', '/instructor/courses/{id}/modules', { tag: 'Instructor', summary: 'Add a module', body: moduleInputSchema, response: z.any(), status: 201 });
@@ -249,7 +255,10 @@ get('/instructor/courses/{id}/learners/{userId}/progress', { tag: 'Instructor an
 // --- uploads ---------------------------------------------------------------
 mutate('post', '/uploads/presign', { tag: 'Uploads', summary: 'Ask for a signed upload URL. Checks ownership, the MIME allow-list and the size limit before issuing one.', body: presignUploadSchema, response: presignedUploadSchema, status: 201 });
 mutate('post', '/uploads/{id}/complete', { tag: 'Uploads', summary: "Confirm an upload. The server verifies the stored object's size and its real type from its magic bytes, extracts the duration and marks it READY.", response: mediaAssetSchema });
-mutate('delete', '/uploads/{id}', { tag: 'Uploads', summary: 'Cancel an upload and delete the stored object' });
+mutate('delete', '/uploads/{id}', { tag: 'Uploads', summary: 'Cancel an upload, delete the stored object and abort any multipart upload still in flight' });
+get('/uploads/{id}/status', { tag: 'Uploads', summary: 'Which parts of a resumable upload have already landed. Answered from the storage provider, which is the only source that cannot be stale.', response: uploadStatusSchema, secure: true });
+mutate('post', '/uploads/{id}/parts', { tag: 'Uploads', summary: 'Signed targets for a batch of parts. Batched because a 2 GB file at an 8 MB part size is 256 parts, and 256 extra round trips would be most of the latency.', body: partTargetsRequestSchema, response: partTargetsResponseSchema });
+mutate('put', '/uploads/multipart/{uploadId}/parts/{partNumber}', { tag: 'Uploads', summary: "Stage one part (local storage driver only; with S3 the browser PUTs parts straight to the bucket)", response: z.object({ partNumber: z.number(), etag: z.string(), sizeBytes: z.number() }) });
 
 // --- notifications ---------------------------------------------------------
 get('/notifications', { tag: 'Notifications', summary: "The caller's notifications, newest first, with an unread count", response: notificationListSchema, query: notificationQuerySchema, secure: true, list: true });

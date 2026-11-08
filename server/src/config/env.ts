@@ -88,6 +88,20 @@ const envSchema = z
     MAX_IMAGE_MB: z.coerce.number().int().min(1).max(100).default(5),
     /** Lifetime of a signed upload or playback URL. */
     SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
+
+    /**
+     * Above this, an upload is split into parts so a dropped connection
+     * costs one part rather than the whole transfer.
+     *
+     * Below it, one request is simpler and faster — multipart has a
+     * per-part round trip that is pure overhead on a small file.
+     */
+    UPLOAD_MULTIPART_THRESHOLD_MB: z.coerce.number().int().min(1).max(1024).default(16),
+    /**
+     * Part size.  S3 requires at least 5 MB for every part but the last,
+     * so this cannot go below that.
+     */
+    UPLOAD_PART_SIZE_MB: z.coerce.number().int().min(5).max(512).default(8),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production' && env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {

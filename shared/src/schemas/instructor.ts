@@ -359,6 +359,16 @@ export const instructorCourseCardSchema = z.object({
   /** `null` when nobody is enrolled, which the card renders as a dash. */
   averageProgress: z.number().int().min(0).max(100).nullable(),
   lessonsNeedingVideo: z.number().int().min(0),
+  /**
+   * True when the draft differs from what learners can see.
+   *
+   * On the card rather than only in the editor, because the whole point
+   * is that an instructor should not have to open a course to discover
+   * they left changes unpublished.
+   */
+  hasUnpublishedChanges: z.boolean(),
+  /** The version learners see; null before the first publish. */
+  liveVersion: z.number().int().positive().nullable(),
   createdAt: z.string(),
   publishedAt: z.string().nullable(),
 });
@@ -563,19 +573,77 @@ export const presignUploadSchema = z.object({
   originalName: emptyToUndefined(z.string().trim().max(255)),
   /** Present for lesson and thumbnail uploads; ownership is checked against it. */
   courseId: emptyToUndefined(uuidSchema),
+  /**
+   * `name|size|lastModified` for the chosen file.
+   *
+   * Lets the server hand back an unfinished upload of the *same* file
+   * instead of starting a second one. A browser cannot re-read a File
+   * across a page reload, so resuming after one means the user picks the
+   * file again — and this is what proves it is the same file rather than
+   * two different videos stitched together.
+   */
+  fingerprint: emptyToUndefined(z.string().trim().max(255)),
 });
 export type PresignUploadInput = z.infer<typeof presignUploadSchema>;
 
+/** The multipart half of a presign response. */
+export const multipartPlanSchema = z.object({
+  uploadId: z.string(),
+  partSizeBytes: z.number().int().positive(),
+  totalParts: z.number().int().positive(),
+  /** Part numbers already in storage — empty unless this is a resume. */
+  uploadedParts: z.array(z.number().int().positive()),
+  /** True when the server matched an upload already in flight. */
+  resumed: z.boolean(),
+});
+export type MultipartPlan = z.infer<typeof multipartPlanSchema>;
+
 export const presignedUploadSchema = z.object({
   assetId: uuidSchema,
-  /** Where the browser PUTs the bytes. */
-  uploadUrl: z.string(),
+  /** Where the browser PUTs the bytes. Absent for a multipart upload,
+   *  where each part has its own target. */
+  uploadUrl: z.string().optional(),
   method: z.enum(['PUT', 'POST']),
   headers: z.record(z.string()),
   storageKey: z.string(),
   expiresInSeconds: z.number().int().positive(),
+  /** Present when the file is large enough to be sent in parts. */
+  multipart: multipartPlanSchema.optional(),
 });
 export type PresignedUpload = z.infer<typeof presignedUploadSchema>;
+
+export const presignedPartTargetSchema = z.object({
+  uploadUrl: z.string(),
+  method: z.enum(['PUT', 'POST']),
+  headers: z.record(z.string()),
+  expiresInSeconds: z.number().int().positive(),
+});
+export type PresignedPartTarget = z.infer<typeof presignedPartTargetSchema>;
+
+export const partTargetsRequestSchema = z.object({
+  /** Up to one page of parts at a time, so one request cannot sign 10,000. */
+  partNumbers: z.array(z.number().int().positive().max(10_000)).min(1).max(64),
+});
+export type PartTargetsRequest = z.infer<typeof partTargetsRequestSchema>;
+
+export const partTargetsResponseSchema = z.object({
+  parts: z.array(
+    z.object({ partNumber: z.number().int().positive(), target: presignedPartTargetSchema }),
+  ),
+});
+export type PartTargetsResponse = z.infer<typeof partTargetsResponseSchema>;
+
+/** What the client asks for when deciding what still needs sending. */
+export const uploadStatusSchema = z.object({
+  assetId: uuidSchema,
+  status: z.enum(MEDIA_STATUSES),
+  sizeBytes: z.number().int().min(0),
+  partSizeBytes: z.number().int().nullable(),
+  totalParts: z.number().int().nullable(),
+  uploadedParts: z.array(z.number().int().positive()),
+  uploadedBytes: z.number().int().min(0),
+});
+export type UploadStatus = z.infer<typeof uploadStatusSchema>;
 
 export const completeUploadSchema = z.object({
   /**

@@ -67,6 +67,7 @@ export const qk = {
       [...qk.instructor.all, 'courses', filters] as const,
     course: (id: string) => [...qk.instructor.all, 'course', id] as const,
     checklist: (id: string) => [...qk.instructor.all, 'checklist', id] as const,
+    draftState: (id: string) => [...qk.instructor.all, 'draft-state', id] as const,
     preview: (id: string) => [...qk.instructor.all, 'preview', id] as const,
     activity: (filters: Partial<InstructorActivityQuery>) =>
       [...qk.instructor.all, 'activity', filters] as const,

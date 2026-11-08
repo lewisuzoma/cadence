@@ -15,6 +15,7 @@ import {
 import {
   DIFFICULTIES,
   courseInputSchema,
+  formatDateTime,
   formatDuration,
   type CourseInput,
   type Difficulty,
@@ -34,6 +35,14 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input, Textarea } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -46,6 +55,7 @@ import {
 import { applyFieldErrors } from '@/features/auth/auth.queries';
 import { useCourseCategories } from '@/features/courses/courses.queries';
 import {
+  useCourseDraftState,
   useCourseStatus,
   useCreateCourse,
   useInstructorCourse,
@@ -170,13 +180,21 @@ function ReadinessPanel({
   courseId,
   onPublish,
   publishing,
+  isLive,
+  hasUnpublishedChanges,
 }: {
   checklist: PublishChecklist;
   courseId: string;
   onPublish: () => void;
   publishing: boolean;
+  /** True once the course has been published at least once. */
+  isLive: boolean;
+  hasUnpublishedChanges: boolean;
 }) {
   const outstanding = checklist.total - checklist.passing;
+  // A live course with nothing pending has nothing to publish, and a
+  // button that would be a no-op is worse than a disabled one.
+  const nothingToPublish = isLive && !hasUnpublishedChanges;
 
   return (
     <Card>
@@ -242,17 +260,23 @@ function ReadinessPanel({
         <Button
           type="button"
           onClick={onPublish}
-          disabled={!checklist.canPublish || publishing}
+          disabled={!checklist.canPublish || publishing || nothingToPublish}
           className="w-full"
         >
           {publishing
             ? 'Publishing…'
-            : checklist.canPublish
-              ? 'Publish course'
-              : `Publish course · ${outstanding} to fix`}
+            : !checklist.canPublish
+              ? `Publish course · ${outstanding} to fix`
+              : nothingToPublish
+                ? 'Everything is published'
+                : isLive
+                  ? 'Publish changes'
+                  : 'Publish course'}
         </Button>
         <p className="text-caption text-muted-foreground">
-          Drafts are only visible to you and admins.
+          {isLive
+            ? 'Learners keep seeing the published version until you publish again.'
+            : 'Drafts are only visible to you and admins.'}
         </p>
       </CardContent>
     </Card>
@@ -266,6 +290,7 @@ export function CourseFormPage() {
 
   const course = useInstructorCourse(id);
   const checklist = usePublishChecklist(id);
+  const draftState = useCourseDraftState(id);
   const categories = useCourseCategories();
   const create = useCreateCourse();
   const update = useUpdateCourse(id ?? '');
@@ -274,6 +299,9 @@ export function CourseFormPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [thumbBusy, setThumbBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [summary, setSummary] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const form = useForm<CourseInput>({
@@ -350,17 +378,24 @@ export function CourseFormPage() {
   });
 
   const onPublish = () => {
-    status.mutate('publish', {
-      onError: (error) => {
-        // The 422 carries the whole checklist; refetching renders it.
-        void checklist.refetch();
-        setFormError(
-          error instanceof ApiError
-            ? error.message
-            : 'The course could not be published.',
-        );
+    status.mutate(
+      { action: 'publish', ...(summary.trim() ? { changeSummary: summary.trim() } : {}) },
+      {
+        onSuccess: () => {
+          setPublishOpen(false);
+          setSummary('');
+        },
+        onError: (error) => {
+          // The 422 carries the whole checklist; refetching renders it.
+          void checklist.refetch();
+          setFormError(
+            error instanceof ApiError
+              ? error.message
+              : 'The course could not be published.',
+          );
+        },
       },
-    });
+    );
   };
 
   if (isEdit && course.isPending) return <LoadingState label="Loading the course" />;
@@ -421,6 +456,50 @@ export function CourseFormPage() {
           ) : null
         }
       />
+
+      {/* The one thing an instructor editing a live course needs to know:
+          what they are looking at is not what their learners are. */}
+      {isEdit && draftState.data?.hasUnpublishedChanges ? (
+        <div
+          role="status"
+          className="flex flex-wrap items-start gap-3 rounded-lg border border-warning/40 bg-warning-tint px-4 py-3"
+        >
+          <AlertCircle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <p className="text-small font-semibold text-foreground">
+              You have unpublished changes
+            </p>
+            <p className="text-small text-secondary-foreground">
+              Learners still see{' '}
+              {draftState.data.liveVersion
+                ? `version ${draftState.data.liveVersion}`
+                : 'the published version'}
+              . These changes go live when you publish:
+            </p>
+            <ul className="mt-2 flex flex-wrap gap-1.5">
+              {draftState.data.pendingChanges.slice(0, 6).map((change) => (
+                <li key={`${change.kind}-${change.field}`}>
+                  <Badge variant="secondary">{change.label}</Badge>
+                </li>
+              ))}
+              {draftState.data.pendingChanges.length > 6 ? (
+                <li>
+                  <Badge variant="outline">
+                    +{draftState.data.pendingChanges.length - 6} more
+                  </Badge>
+                </li>
+              ) : null}
+            </ul>
+          </div>
+          <Button
+            size="sm"
+            disabled={!checklist.data?.canPublish || status.isPending}
+            onClick={() => setPublishOpen(true)}
+          >
+            Publish changes
+          </Button>
+        </div>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <Form {...form}>
@@ -734,9 +813,64 @@ export function CourseFormPage() {
             <ReadinessPanel
               checklist={checklist.data}
               courseId={id!}
-              onPublish={onPublish}
+              onPublish={() => setPublishOpen(true)}
               publishing={status.isPending}
+              isLive={draftState.data?.liveVersion !== null && draftState.data !== undefined}
+              hasUnpublishedChanges={draftState.data?.hasUnpublishedChanges ?? false}
             />
+          ) : null}
+
+          {isEdit && draftState.data && draftState.data.history.length > 0 ? (
+            <Card>
+              <CardHeader className="flex-row items-center justify-between gap-2">
+                <CardTitle>Version history</CardTitle>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setHistoryOpen((open) => !open)}
+                  aria-expanded={historyOpen}
+                >
+                  {historyOpen ? 'Hide' : 'Show'}
+                </Button>
+              </CardHeader>
+              {historyOpen ? (
+                <CardContent>
+                  <ol className="flex flex-col gap-3">
+                    {draftState.data.history.map((entry) => (
+                      <li key={entry.id} className="flex gap-3">
+                        <span
+                          className={cn(
+                            'mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md font-mono text-caption font-semibold',
+                            entry.isLive
+                              ? 'bg-success-tint text-success'
+                              : 'bg-muted text-muted-foreground',
+                          )}
+                          aria-hidden="true"
+                        >
+                          v{entry.version}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="flex flex-wrap items-center gap-2 text-small font-semibold">
+                            {entry.title}
+                            {entry.isLive ? <Badge variant="success">Live</Badge> : null}
+                          </span>
+                          <span className="block text-caption text-muted-foreground">
+                            {entry.lessonCount} lesson
+                            {entry.lessonCount === 1 ? '' : 's'} ·{' '}
+                            {formatDateTime(entry.publishedAt)} · {entry.publishedBy}
+                          </span>
+                          {entry.changeSummary ? (
+                            <span className="block text-caption text-secondary-foreground">
+                              {entry.changeSummary}
+                            </span>
+                          ) : null}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                </CardContent>
+              ) : null}
+            </Card>
           ) : null}
 
           <Card>
@@ -775,6 +909,71 @@ export function CourseFormPage() {
           </Card>
         </aside>
       </div>
+
+      {/* --- publish ------------------------------------------------- */}
+      <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {draftState.data?.liveVersion
+                ? `Publish version ${draftState.data.liveVersion + 1}?`
+                : 'Publish this course?'}
+            </DialogTitle>
+            <DialogDescription>
+              {draftState.data?.liveVersion
+                ? 'Your changes replace what learners currently see. Anyone already enrolled keeps their progress.'
+                : 'The course appears in the catalog and learners can enroll.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {draftState.data && draftState.data.pendingChanges.length > 0 ? (
+            <div className="rounded-lg bg-muted p-3">
+              <p className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                What changes
+              </p>
+              <ul className="mt-2 flex flex-col gap-1">
+                {draftState.data.pendingChanges.map((change) => (
+                  <li
+                    key={`${change.kind}-${change.field}`}
+                    className="text-small text-secondary-foreground"
+                  >
+                    {change.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="change-summary" className="text-small font-semibold">
+              What changed? (optional)
+            </label>
+            <Textarea
+              id="change-summary"
+              value={summary}
+              onChange={(event) => setSummary(event.target.value)}
+              rows={3}
+              placeholder="e.g. Rewrote the tracing lesson and fixed two durations"
+            />
+            <p className="text-caption text-muted-foreground">
+              Kept with this version so you can tell your releases apart later.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPublishOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={onPublish} disabled={status.isPending}>
+              {status.isPending
+                ? 'Publishing…'
+                : draftState.data?.liveVersion
+                  ? 'Publish changes'
+                  : 'Publish course'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

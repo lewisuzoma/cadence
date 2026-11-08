@@ -150,3 +150,62 @@ export const coursePreviewSchema = courseDetailSchema.extend({
   preview: previewStateSchema,
 });
 export type CoursePreview = z.infer<typeof coursePreviewSchema>;
+
+// ---------------------------------------------------------------------------
+// Content versioning
+// ---------------------------------------------------------------------------
+
+export const PENDING_CHANGE_KINDS = [
+  'COURSE_FIELD',
+  'LESSON_ADDED',
+  'LESSON_EDITED',
+  'LESSON_REMOVED',
+  'LESSONS_REORDERED',
+] as const;
+export type PendingChangeKind = (typeof PENDING_CHANGE_KINDS)[number];
+
+/**
+ * One difference between the draft and what learners can see.
+ *
+ * A list rather than a boolean, because the instructor's question is
+ * never "is something different?" but "what will my learners notice if
+ * I publish?".
+ */
+export const pendingChangeSchema = z.object({
+  kind: z.enum(PENDING_CHANGE_KINDS),
+  /** A field name, or a lesson id for the lesson kinds. */
+  field: z.string(),
+  label: z.string(),
+});
+export type PendingChange = z.infer<typeof pendingChangeSchema>;
+
+export const courseVersionSummarySchema = z.object({
+  id: uuidSchema,
+  version: z.number().int().positive(),
+  title: z.string(),
+  publishedAt: z.string(),
+  publishedBy: z.string(),
+  changeSummary: z.string().nullable(),
+  lessonCount: z.number().int().min(0),
+  /** True for the one learners are currently seeing. */
+  isLive: z.boolean(),
+});
+export type CourseVersionSummary = z.infer<typeof courseVersionSummarySchema>;
+
+/** The draft-versus-live state of one course, for the editor. */
+export const courseDraftStateSchema = z.object({
+  courseId: uuidSchema,
+  /** Null until the course has been published once. */
+  liveVersion: z.number().int().positive().nullable(),
+  livePublishedAt: z.string().nullable(),
+  hasUnpublishedChanges: z.boolean(),
+  pendingChanges: z.array(pendingChangeSchema),
+  history: z.array(courseVersionSummarySchema),
+});
+export type CourseDraftState = z.infer<typeof courseDraftStateSchema>;
+
+/** Publishing takes an optional note describing what changed. */
+export const publishCourseSchema = z.object({
+  changeSummary: emptyToUndefined(z.string().trim().max(500)),
+});
+export type PublishCourseInput = z.infer<typeof publishCourseSchema>;

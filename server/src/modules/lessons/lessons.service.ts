@@ -14,6 +14,7 @@ import { prisma } from '../../lib/prisma.js';
 import type { AuthUser } from '../../middlewares/types.js';
 import { buildLessonSummary, indexBy } from '../courses/courses.projection.js';
 import { uploadsService } from '../uploads/uploads.service.js';
+import { courseVersions } from '../courses/courses.versions.js';
 import {
   notifyReopenedLearners,
   recalculateCourseEnrollments,
@@ -60,6 +61,22 @@ async function resolveAccess(
   // A draft's lessons must not be distinguishable from lessons that do not exist.
   if (course.status === 'DRAFT') throw new NotFoundError('Lesson');
 
+  /*
+   * A lesson that exists in the draft but not in the published version
+   * is not reachable by a learner, however they arrived at its id.
+   *
+   * Without this, versioning would be cosmetic: the course page would
+   * hide an unpublished lesson while a guessed or bookmarked URL still
+   * played it. 404 rather than 403, for the same reason a draft course
+   * is a 404 — an unreleased lesson should be indistinguishable from one
+   * that was never created.
+   */
+  const publishedLesson = await prisma.courseVersionLesson.findFirst({
+    where: { lessonId: lesson.id, version: { liveFor: { some: { id: lesson.courseId } } } },
+    select: { isPreview: true },
+  });
+  if (!publishedLesson) throw new NotFoundError('Lesson');
+
   const enrollment = user
     ? await prisma.enrollment.findUnique({
         where: { userId_courseId: { userId: user.id, courseId: lesson.courseId } },
@@ -69,8 +86,14 @@ async function resolveAccess(
   const enrolled = !!enrollment && enrollment.status !== 'CANCELLED';
   if (enrolled) return { canView: true, isTracked: enrollment.status === 'ACTIVE' };
 
-  // Previews are the catalog's shop window: viewable, never tracked.
-  if (lesson.isPreview && course.status === 'PUBLISHED') {
+  /*
+   * Previews are the catalog's shop window: viewable, never tracked.
+   *
+   * The published version decides, not the draft: an instructor who has
+   * ticked "free preview" but not yet published has not made the lesson
+   * free to the world.
+   */
+  if (publishedLesson.isPreview && course.status === 'PUBLISHED') {
     return { canView: true, isTracked: false };
   }
 
@@ -140,12 +163,23 @@ export const lessonsService = {
 
     const access = await resolveAccess(lesson, user);
 
-    // Course-wide ordering: module order first, then lesson order within it.
-    const siblings = await prisma.lesson.findMany({
-      where: { courseId: lesson.courseId },
-      orderBy: [{ module: { order: 'asc' } }, { order: 'asc' }],
-      select: { id: true },
-    });
+    /*
+     * Previous / next must walk the curriculum the viewer is actually
+     * seeing. Using the draft would send a learner to a lesson that is
+     * not published yet, which the access check would then refuse —
+     * a dead end produced by the app's own navigation.
+     */
+    const liveForNav = access.isTracked || !access.canView
+      ? await courseVersions.live(lesson.courseId)
+      : null;
+
+    const siblings = liveForNav
+      ? liveForNav.lessons.map((row) => ({ id: row.lessonId }))
+      : await prisma.lesson.findMany({
+          where: { courseId: lesson.courseId },
+          orderBy: [{ module: { order: 'asc' } }, { order: 'asc' }],
+          select: { id: true },
+        });
     const index = siblings.findIndex((row) => row.id === lesson.id);
 
     const progress = user
@@ -204,7 +238,7 @@ export const lessonsService = {
     const canView =
       privileged || (!!enrollment && enrollment.status !== 'CANCELLED');
 
-    const [lessons, progressRows] = await Promise.all([
+    const [lessons, progressRows, live] = await Promise.all([
       prisma.lesson.findMany({
         where: { courseId },
         orderBy: [{ module: { order: 'asc' } }, { order: 'asc' }],
@@ -217,14 +251,43 @@ export const lessonsService = {
           durationSeconds: true,
           order: true,
           isPreview: true,
+          videoUrl: true,
+          videoAssetId: true,
+          videoAsset: { select: { status: true } },
         },
       }),
       user
         ? prisma.lessonProgress.findMany({ where: { userId: user.id, lesson: { courseId } } })
         : Promise.resolve([] as LessonProgress[]),
+      // The owner and admins get the draft; everyone else the published
+      // curriculum, so an unpublished lesson is simply not in the list.
+      privileged ? Promise.resolve(null) : courseVersions.live(courseId),
     ]);
 
     const byLesson = indexBy(progressRows, (row) => row.lessonId);
+    const byId = indexBy(lessons, (row) => row.id);
+
+    if (live) {
+      return live.lessons
+        .map((snapshot) => {
+          const row = byId.get(snapshot.lessonId);
+          if (!row) return null;
+          return buildLessonSummary(
+            {
+              ...row,
+              title: snapshot.title,
+              description: snapshot.description,
+              durationSeconds: snapshot.durationSeconds,
+              order: snapshot.order,
+              isPreview: snapshot.isPreview,
+            },
+            byLesson.get(snapshot.lessonId),
+            { canView },
+          );
+        })
+        .filter((lesson): lesson is NonNullable<typeof lesson> => lesson !== null);
+    }
+
     return lessons.map((lesson) =>
       buildLessonSummary(lesson, byLesson.get(lesson.id), { canView }),
     );

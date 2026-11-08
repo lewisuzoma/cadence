@@ -178,7 +178,10 @@ export const instructorRepository = {
         AND (
           CASE
             WHEN l."videoAssetId" IS NOT NULL THEN m."status" <> 'READY'
-            ELSE l."videoUrl" NOT LIKE 'https://%'
+            -- Mirrors isPlayableVideoUrl: an https URL or a path this
+            -- app serves itself. Kept as SQL because counting these in
+            -- JavaScript would mean loading every lesson of every course.
+            ELSE (l."videoUrl" NOT LIKE 'https://%' AND l."videoUrl" NOT LIKE '/%')
           END
         )
       GROUP BY l."courseId"
@@ -346,11 +349,41 @@ export const instructorRepository = {
           difficulty: true,
           status: true,
           createdAt: true,
+          updatedAt: true,
           publishedAt: true,
         },
       }),
       prisma.course.count({ where: params.where }),
     ]);
+  },
+
+  /**
+   * The live version number of each course, and whether the draft has
+   * moved on since it was published.
+   *
+   * `updatedAt > publishedAt` is a cheap proxy for "something changed",
+   * good enough for a badge on a card. The editor runs the real
+   * field-by-field diff when the instructor opens the course, so a false
+   * positive here costs a banner that then lists no changes, never a
+   * missed one.
+   */
+  async liveVersionNumbers(courseIds: string[]) {
+    if (courseIds.length === 0) return [];
+    const rows = await prisma.course.findMany({
+      where: { id: { in: courseIds }, liveVersionId: { not: null } },
+      select: {
+        id: true,
+        updatedAt: true,
+        liveVersion: { select: { version: true, publishedAt: true } },
+      },
+    });
+    return rows.map((row) => ({
+      courseId: row.id,
+      version: row.liveVersion?.version ?? null,
+      stale: row.liveVersion
+        ? row.updatedAt.getTime() > row.liveVersion.publishedAt.getTime() + 1000
+        : false,
+    }));
   },
 
   /** Status counts for the All / Published / Drafts / Archived tabs. */

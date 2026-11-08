@@ -13,6 +13,7 @@ import {
   lessonUpdateSchema,
   moduleInputSchema,
   moduleUpdateSchema,
+  publishCourseSchema,
   reorderLessonsSchema,
 } from '@cadence/shared';
 import { authenticate, requirePermission } from '../../middlewares/authenticate.js';
@@ -143,10 +144,23 @@ instructorRouter.delete(
  * publishing runs a checklist, archiving is a soft retirement that keeps
  * enrolled learners, and the activity feed records them distinctly.
  */
+/**
+ * What differs between the draft and the published version.
+ *
+ * A read, so `instructor:dashboard` rather than `course:manage-own`: a
+ * suspended instructor can still see what they had in progress.
+ */
+instructorRouter.get(
+  '/courses/:id/draft-state',
+  requirePermission('instructor:dashboard'),
+  validate({ params: idParamSchema }),
+  asyncHandler(instructorController.draftState),
+);
+
 instructorRouter.post(
   '/courses/:id/publish',
   requirePermission('course:manage-own'),
-  validate({ params: idParamSchema }),
+  validate({ params: idParamSchema, body: publishCourseSchema }),
   asyncHandler(instructorController.publish),
 );
 

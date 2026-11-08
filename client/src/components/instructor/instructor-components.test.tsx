@@ -156,6 +156,9 @@ describe('the video uploader', () => {
       setRequestHeader: vi.fn(),
       send: vi.fn(),
       abort: vi.fn(),
+      // The uploader reads the part's ETag from the response, so a stub
+      // has to answer the same question a real XHR would.
+      getResponseHeader: vi.fn(() => '"stub-etag"'),
       status: 200,
       withCredentials: false,
     };
@@ -219,11 +222,18 @@ describe('the video uploader', () => {
     };
   }
 
-  /** jsdom has no real File picker, so the input is driven directly. */
+  /**
+   * A 12 MB file.
+   *
+   * Real bytes, because the uploader now takes the total from the
+   * `File` itself rather than from the XHR progress event — which is
+   * the more honest source, and means a fixture has to be the size it
+   * claims to be.
+   */
+  const FILE_BYTES = 12 * 1024 * 1024;
+
   function videoFile() {
-    return new File([new Uint8Array([0, 0, 0, 32])], 'lesson.mp4', {
-      type: 'video/mp4',
-    });
+    return new File([new Uint8Array(FILE_BYTES)], 'lesson.mp4', { type: 'video/mp4' });
   }
 
   it('shows progress while uploading, then the ready state', async () => {
@@ -237,7 +247,7 @@ describe('the video uploader', () => {
           kind: 'VIDEO',
           status: 'READY',
           mimeType: 'video/mp4',
-          sizeBytes: 412 * 1024 * 1024,
+          sizeBytes: FILE_BYTES,
           durationSeconds: 1008,
           originalName: 'lesson.mp4',
           url: null,
@@ -268,10 +278,11 @@ describe('the video uploader', () => {
     await waitFor(() => {
       expect(transfer.xhr.send).toHaveBeenCalled();
     });
-    transfer.progress(264 * 1024 * 1024, 412 * 1024 * 1024);
+    // 64% of 12 MB, as the artifact's "264 of 412 MB · 64%" line reads.
+    transfer.progress(Math.round(FILE_BYTES * 0.64), FILE_BYTES);
     await waitFor(() => {
       expect(
-        screen.getByText((content) => /264 of 412 MB/.test(content)),
+        screen.getByText((content) => /8 of 12 MB/.test(content)),
       ).toBeInTheDocument();
     });
     expect(screen.getByText((content) => /64%/.test(content))).toBeInTheDocument();

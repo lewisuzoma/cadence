@@ -43,6 +43,8 @@ import { adminApplicationsApi, applicationsApi, instructorApi } from './instruct
 
 /** Everything a course change can affect, invalidated together. */
 function invalidateCourseWorld(queryClient: QueryClient): void {
+  // Covers the draft state too: any course or lesson edit can create or
+  // clear a pending change, and a stale banner is worse than none.
   void queryClient.invalidateQueries({ queryKey: qk.instructor.all });
   // The catalog, because publishing and archiving change what learners see.
   void queryClient.invalidateQueries({ queryKey: qk.courses.all });
@@ -167,6 +169,21 @@ export function usePublishChecklist(id: string | undefined) {
   });
 }
 
+/**
+ * How the draft differs from what learners see.
+ *
+ * Read by the editor's banner and the version history, so both say the
+ * same thing — and invalidated by every course mutation, because any of
+ * them can create or clear a pending change.
+ */
+export function useCourseDraftState(id: string | undefined) {
+  return useQuery({
+    queryKey: qk.instructor.draftState(id ?? ''),
+    queryFn: () => instructorApi.draftState(id!),
+    enabled: Boolean(id),
+  });
+}
+
 export function useCreateCourse() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -206,23 +223,28 @@ export function useDeleteCourse() {
  * One hook over three endpoints, because the cache consequences are
  * identical and the only difference is which verb and which message.
  */
+export type CourseStatusAction =
+  | { action: 'publish'; changeSummary?: string }
+  | { action: 'unpublish' }
+  | { action: 'archive' };
+
 export function useCourseStatus(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (action: 'publish' | 'unpublish' | 'archive') =>
-      action === 'publish'
-        ? instructorApi.publish(id)
-        : action === 'unpublish'
+    mutationFn: (input: CourseStatusAction) =>
+      input.action === 'publish'
+        ? instructorApi.publish(id, input.changeSummary)
+        : input.action === 'unpublish'
           ? instructorApi.unpublish(id)
           : instructorApi.archive(id),
     // A failed publish carries the checklist; the page renders it in place.
     meta: { silent: true },
-    onSuccess: (_data, action) => {
+    onSuccess: (_data, input) => {
       invalidateCourseWorld(queryClient);
       toast.success(
-        action === 'publish'
+        input.action === 'publish'
           ? 'Course published'
-          : action === 'unpublish'
+          : input.action === 'unpublish'
             ? 'Course moved back to drafts'
             : 'Course archived',
       );

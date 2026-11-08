@@ -8,6 +8,7 @@ import type {
   ApproveApplicationInput,
   CourseAnalytics,
   CourseDetail,
+  CourseDraftState,
   CourseInput,
   CourseLearnerQuery,
   CourseLearnerRow,
@@ -126,8 +127,15 @@ export const instructorApi = {
 
   remove: (id: string) => apiClient.delete(`/instructor/courses/${id}`),
 
-  publish: (id: string) =>
-    apiClient.post<CourseSummary>(`/instructor/courses/${id}/publish`),
+  /** The draft-versus-live state: pending changes and the history. */
+  draftState: (id: string) =>
+    apiClient.get<CourseDraftState>(`/instructor/courses/${id}/draft-state`),
+
+  publish: (id: string, changeSummary?: string) =>
+    apiClient.post<CourseSummary>(
+      `/instructor/courses/${id}/publish`,
+      changeSummary ? { changeSummary } : {},
+    ),
 
   unpublish: (id: string) =>
     apiClient.post<CourseSummary>(`/instructor/courses/${id}/unpublish`),

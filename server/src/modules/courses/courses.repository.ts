@@ -66,17 +66,34 @@ export const coursesRepository = {
     difficulty?: Prisma.EnumDifficultyFilter | undefined;
     sort: CourseSort;
   }) {
+    /*
+     * Search and filter the **published** text, not the draft.
+     *
+     * The catalogue shows each course's live version, so searching the
+     * draft would mean a learner typing the title they can see finds
+     * nothing the moment its author starts editing it — and, worse, that
+     * a half-written draft title becomes searchable before anyone has
+     * published it.
+     */
     const where: Prisma.CourseWhereInput = {
       status: 'PUBLISHED',
-      ...(params.category ? { category: params.category } : {}),
-      ...(params.difficulty ? { difficulty: params.difficulty } : {}),
+      // A published course always has a live version; requiring one also
+      // keeps a course mid-publish out of the results.
+      liveVersion: { isNot: null },
+      ...(params.category ? { liveVersion: { is: { category: params.category } } } : {}),
+      ...(params.difficulty ? { liveVersion: { is: { difficulty: params.difficulty } } } : {}),
       ...(params.search
         ? {
-            OR: [
-              { title: { contains: params.search, mode: 'insensitive' } },
-              { description: { contains: params.search, mode: 'insensitive' } },
-              { category: { contains: params.search, mode: 'insensitive' } },
-            ],
+            liveVersion: {
+              is: {
+                OR: [
+                  { title: { contains: params.search, mode: 'insensitive' } },
+                  { description: { contains: params.search, mode: 'insensitive' } },
+                  { shortDescription: { contains: params.search, mode: 'insensitive' } },
+                  { category: { contains: params.search, mode: 'insensitive' } },
+                ],
+              },
+            },
           }
         : {}),
     };
@@ -250,10 +267,16 @@ export const coursesRepository = {
     });
   },
 
-  /** Distinct categories, for the catalog's filter chips. */
+  /**
+   * Distinct categories, for the catalog's filter chips.
+   *
+   * From the published versions, so a chip always matches something: a
+   * category that exists only in an unpublished draft would filter the
+   * catalogue down to nothing.
+   */
   async listCategories(): Promise<string[]> {
-    const rows = await prisma.course.findMany({
-      where: { status: 'PUBLISHED' },
+    const rows = await prisma.courseVersion.findMany({
+      where: { liveFor: { some: { status: 'PUBLISHED' } } },
       distinct: ['category'],
       select: { category: true },
       orderBy: { category: 'asc' },

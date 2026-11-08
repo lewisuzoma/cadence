@@ -24,6 +24,7 @@ import {
   moduleUpdateSchema,
   notificationQuerySchema,
   paginationQuerySchema,
+  partTargetsRequestSchema,
   presignUploadSchema,
   progressQuerySchema,
   reinstateInstructorSchema,
@@ -235,6 +236,40 @@ apiRouter.delete(
   requirePermission('media:upload'),
   validate({ params: idParamSchema }),
   asyncHandler(uploadsController.remove),
+);
+
+/*
+ * Resumable uploads.
+ *
+ * `status` is what a resume begins with — which parts are already in
+ * storage — and `parts` issues signed targets for the ones that are not,
+ * in a batch so a 256-part file does not need 256 round trips to find
+ * out where to put everything.
+ */
+apiRouter.get(
+  '/uploads/:id/status',
+  authenticate,
+  requirePermission('media:upload'),
+  validate({ params: idParamSchema }),
+  asyncHandler(uploadsController.status),
+);
+
+apiRouter.post(
+  '/uploads/:id/parts',
+  authenticate,
+  csrfProtection,
+  requirePermission('media:upload'),
+  validate({ params: idParamSchema, body: partTargetsRequestSchema }),
+  asyncHandler(uploadsController.partTargets),
+);
+
+/** The local driver's part-receiving endpoint; unused on the S3 path. */
+apiRouter.put(
+  '/uploads/multipart/:uploadId/parts/:partNumber',
+  authenticate,
+  csrfProtection,
+  requirePermission('media:upload'),
+  asyncHandler(uploadsController.putPart),
 );
 
 /*

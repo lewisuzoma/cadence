@@ -139,6 +139,7 @@ model User {
   courseEvents           CourseEvent[]
   mediaAssets            MediaAsset[]
   notifications          Notification[]
+  publishedVersions      CourseVersion[] @relation("VersionPublisher")
 
   @@index([role, isActive])
   @@map("users")
@@ -214,10 +215,19 @@ model Course {
   /// needs no knowledge of where an image came from.
   thumbnailAssetId   String?  @db.Uuid
 
+  /// The version learners currently see.
+  ///
+  /// Null until the course is first published. The Course row itself is
+  /// the instructor's working draft, so these two differ exactly when
+  /// there are unpublished changes.
+  liveVersionId      String?  @db.Uuid
+
   /// Restrict, not cascade: deleting the author must not silently delete the
   /// catalogue.  Deactivate the user instead.
   createdBy      User          @relation("CourseAuthor", fields: [createdById], references: [id], onDelete: Restrict)
   thumbnailAsset MediaAsset?   @relation("CourseThumbnail", fields: [thumbnailAssetId], references: [id], onDelete: SetNull)
+  liveVersion    CourseVersion?  @relation("LiveVersion", fields: [liveVersionId], references: [id], onDelete: SetNull)
+  versions       CourseVersion[]
   modules        Module[]
   lessons        Lesson[]
   enrollments    Enrollment[]
@@ -269,10 +279,11 @@ model Lesson {
   /// video, and the service decides which to serve.
   videoAssetId String? @db.Uuid
 
-  module     Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
-  course     Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  videoAsset MediaAsset?      @relation("LessonVideo", fields: [videoAssetId], references: [id], onDelete: SetNull)
-  progress   LessonProgress[]
+  module        Module                @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  course        Course                @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  videoAsset    MediaAsset?           @relation("LessonVideo", fields: [videoAssetId], references: [id], onDelete: SetNull)
+  progress      LessonProgress[]
+  versionsIn    CourseVersionLesson[]
 
   @@unique([moduleId, order])
   @@index([courseId])
@@ -474,6 +485,23 @@ model MediaAsset {
   durationSeconds Int?
   originalName    String?     @db.VarChar(255)
   status          MediaStatus @default(PENDING)
+
+  /// --- resumable uploads ------------------------------------------------
+  /// The provider's multipart id, while an upload is in flight.  Null for
+  /// a small file sent in one request, and cleared once the parts have
+  /// been assembled.
+  uploadId      String? @db.VarChar(512)
+  /// Size of every part but the last.  Needed to resume: the client has
+  /// to slice the file the same way it did the first time, or the parts
+  /// it skips would not line up with the ones already stored.
+  partSizeBytes Int?
+  /// Identifies the local file this upload came from, as
+  /// `name|size|lastModified`.  A browser cannot re-read a File across a
+  /// reload, so resuming after one means the user picks the file again —
+  /// and this is what proves they picked the *same* file rather than
+  /// stitching two different videos together.
+  fingerprint   String? @db.VarChar(255)
+
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
@@ -484,6 +512,8 @@ model MediaAsset {
   @@index([ownerId, kind])
   /// Finds abandoned PENDING uploads for the cleanup job.
   @@index([status, createdAt])
+  /// Finds a resumable upload when the user re-picks the same file.
+  @@index([ownerId, fingerprint, status])
   @@map("media_assets")
 }
 
@@ -504,4 +534,88 @@ model Notification {
   /// Serves both the unread badge and the newest-first dropdown.
   @@index([userId, readAt, createdAt])
   @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// Course content versioning
+// ---------------------------------------------------------------------------
+
+/// A published snapshot of a course.
+///
+/// Why a snapshot rather than editing in place: without one, correcting a
+/// typo and restructuring a curriculum are the same operation, and both
+/// land on learners mid-lesson. With one, the Course row is the
+/// instructor's *draft* and this is what learners actually see, so an
+/// instructor can work on the next revision of a live course without
+/// anyone watching it notice until they publish.
+///
+/// The snapshot deliberately does NOT copy lessons wholesale — it
+/// references them by their stable id (see CourseVersionLesson). Progress
+/// is keyed by lessonId, so duplicating lesson rows per version would
+/// orphan every learner's history on each publish.
+model CourseVersion {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId String @db.Uuid
+  /// 1, 2, 3… per course. Shown to instructors as "v3".
+  version  Int
+
+  /// The course's presentation, frozen at publish time.
+  title              String   @db.VarChar(140)
+  shortDescription   String   @db.VarChar(160)
+  description        String
+  category           String   @db.VarChar(60)
+  difficulty         Difficulty
+  thumbnailUrl       String   @db.VarChar(2048)
+  learningObjectives String[]
+  prerequisites      String[]
+  targetAudience     String
+
+  publishedAt   DateTime @default(now())
+  publishedById String   @db.Uuid
+  /// What changed since the previous version, written by the instructor.
+  changeSummary String?
+
+  course      Course                @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  publishedBy User                  @relation("VersionPublisher", fields: [publishedById], references: [id], onDelete: Restrict)
+  lessons     CourseVersionLesson[]
+  liveFor     Course[]              @relation("LiveVersion")
+
+  @@unique([courseId, version])
+  @@index([courseId, publishedAt])
+  @@map("course_versions")
+}
+
+/// One lesson as it appeared in a published version.
+///
+/// `lessonId` is a real foreign key, not a copy: the learner's player and
+/// their LessonProgress both key on it, so the snapshot describes *how a
+/// lesson was presented* while the lesson itself stays a single row with
+/// a stable identity.
+///
+/// Cascading on lesson deletion is deliberate. Deleting a lesson is
+/// already a destructive act that removes its progress and recalculates
+/// enrollments; leaving a dangling snapshot row would mean the published
+/// curriculum listed a lesson that cannot be played.
+model CourseVersionLesson {
+  id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  versionId String @db.Uuid
+  lessonId  String @db.Uuid
+
+  /// The module this lesson sat in, flattened: a version needs the
+  /// grouping as it was, and modules are themselves editable.
+  moduleTitle String @db.VarChar(140)
+  moduleOrder Int
+
+  title           String  @db.VarChar(140)
+  description     String
+  durationSeconds Int
+  order           Int
+  isPreview       Boolean @default(false)
+
+  version CourseVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  lesson  Lesson        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([versionId, lessonId])
+  @@index([lessonId])
+  @@map("course_version_lessons")
 }

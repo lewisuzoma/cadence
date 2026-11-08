@@ -181,6 +181,71 @@ describe('instructor course management', () => {
       });
     });
 
+    it('accepts a self-hosted video path, not only an https URL', async () => {
+      const { user } = await createInstructor({ email: 'relpath@test.dev' });
+      const { course, module } = await createCourse({
+        ownerId: user.id,
+        status: 'DRAFT',
+        lessonCount: 0,
+      });
+      const agent = await loginAs('relpath@test.dev');
+
+      /*
+       * `/media/...` is what this app serves its own uploads and its
+       * seeded sample videos from, and `mediaUrlSchema` accepts it. A
+       * checklist that demanded `https://` would tell an instructor
+       * their perfectly playable lesson had no video.
+       */
+      await agent
+        .withCsrf(agent.agent.post(`/api/v1/instructor/modules/${module.id}/lessons`))
+        .send({
+          title: 'Self-hosted lesson',
+          description: 'Served by this app.',
+          videoUrl: '/media/lesson-sample.mp4',
+          durationSeconds: 725,
+        });
+
+      const checklist = await agent.agent.get(
+        `/api/v1/instructor/courses/${course.id}/publish-checklist`,
+      );
+      const videoCheck = (
+        checklist.body.data.checks as { id: string; passed: boolean }[]
+      ).find((check) => check.id === 'lesson-videos');
+      expect(videoCheck?.passed).toBe(true);
+
+      const published = await agent
+        .withCsrf(agent.agent.post(`/api/v1/instructor/courses/${course.id}/publish`))
+        .send({});
+      expect(published.status).toBe(200);
+    });
+
+    it('still refuses a plain http:// URL, which a browser blocks as mixed content', async () => {
+      const { user } = await createInstructor({ email: 'insecure@test.dev' });
+      const { course, module } = await createCourse({
+        ownerId: user.id,
+        status: 'DRAFT',
+        lessonCount: 0,
+      });
+      const agent = await loginAs('insecure@test.dev');
+
+      await agent
+        .withCsrf(agent.agent.post(`/api/v1/instructor/modules/${module.id}/lessons`))
+        .send({
+          title: 'Insecure lesson',
+          description: 'Would be blocked for every learner.',
+          videoUrl: 'http://example.test/video.mp4',
+          durationSeconds: 300,
+        });
+
+      const checklist = await agent.agent.get(
+        `/api/v1/instructor/courses/${course.id}/publish-checklist`,
+      );
+      const videoCheck = (
+        checklist.body.data.checks as { id: string; passed: boolean }[]
+      ).find((check) => check.id === 'lesson-videos');
+      expect(videoCheck?.passed).toBe(false);
+    });
+
     it('refuses to publish while the owner is suspended', async () => {
       const { user } = await createInstructor({ email: 'willsuspend@test.dev' });
       const { course } = await publishableCourse(user.id);

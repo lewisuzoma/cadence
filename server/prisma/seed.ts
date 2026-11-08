@@ -15,6 +15,7 @@ import { PrismaClient, type Difficulty, type CourseStatus } from '@prisma/client
 import bcrypt from 'bcryptjs';
 
 import { seedInstructors } from './seed.instructors.js';
+import { seedCourseVersions } from './seed.versions.js';
 
 const prisma = new PrismaClient();
 
@@ -770,6 +771,11 @@ async function main() {
   console.log(
     `  instructors: 2 (1 active, 1 suspended), ${instructors.courses.length} courses, 3 applications`,
   );
+
+  // The equivalent of pressing Publish: learner-facing reads come from
+  // the live version, so a published course without one is invisible.
+  const versioned = await seedCourseVersions(prisma);
+  console.log(`  course versions: ${versioned} published`);
 
   console.log('\nSeed complete. Sign in with:');
   console.log(`  admin      admin@cadence.dev  / ${SEED_PASSWORD}`);

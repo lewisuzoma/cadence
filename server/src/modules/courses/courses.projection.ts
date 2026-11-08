@@ -39,12 +39,34 @@ export type LessonRowForProjection = {
  * video the authoring UI should report as present, and the publish
  * checklist takes the same view.
  */
+
+/**
+ * Whether a lesson's external URL is something a learner can actually
+ * play.
+ *
+ * Two shapes qualify, matching `mediaUrlSchema`:
+ *
+ *  - `https://…` — a video hosted elsewhere;
+ *  - `/…` — a path this app serves itself, which is what the seeded
+ *    sample videos use and what an uploaded asset resolves to.
+ *
+ * Bare `http://` is deliberately excluded: the schema tolerates it, but
+ * a browser on an https page refuses to load it as mixed content, so a
+ * course published with one would look fine to its author and be
+ * unplayable for everyone else.
+ */
+export function isPlayableVideoUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return /^https:\/\//i.test(trimmed) || trimmed.startsWith('/');
+}
+
 export function videoKindFor(lesson: LessonRowForProjection): 'UPLOAD' | 'URL' | 'NONE' {
   if (lesson.videoAsset) {
     return lesson.videoAsset.status === 'READY' ? 'UPLOAD' : 'NONE';
   }
   if (lesson.videoAssetId) return 'NONE';
-  return lesson.videoUrl && /^https:\/\//.test(lesson.videoUrl) ? 'URL' : 'NONE';
+  return isPlayableVideoUrl(lesson.videoUrl) ? 'URL' : 'NONE';
 }
 
 export function buildEnrollmentState(

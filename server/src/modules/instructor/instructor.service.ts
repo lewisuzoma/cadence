@@ -53,23 +53,33 @@ async function decorateCards(
     difficulty: InstructorCourseCard['difficulty'];
     status: InstructorCourseCard['status'];
     createdAt: Date;
+    updatedAt: Date;
     publishedAt: Date | null;
   }[],
   ownerId: string,
 ): Promise<InstructorCourseCard[]> {
   const ids = rows.map((row) => row.id);
-  const [aggregates, rollups, averages, needingVideo] = await Promise.all([
+  const [aggregates, rollups, averages, needingVideo, versions] = await Promise.all([
     coursesRepository.aggregateLessons(ids),
     instructorRepository.enrollmentRollup(ids, ownerId),
     instructorRepository.averageProgress(ids, ownerId),
     instructorRepository.lessonsNeedingVideo(ids),
+    instructorRepository.liveVersionNumbers(ids),
   ]);
 
   const aggregateBy = new Map(aggregates.map((row) => [row.courseId, row]));
   const rollupBy = new Map(rollups.map((row) => [row.courseId, row]));
   const averageBy = new Map(averages.map((row) => [row.courseId, row.averageProgress]));
   const videoBy = new Map(needingVideo.map((row) => [row.courseId, row.count]));
+  const versionBy = new Map(versions.map((row) => [row.courseId, row]));
 
+  /*
+   * "Has unpublished changes" is derived cheaply here rather than by
+   * running the full field-by-field diff per card: a course whose draft
+   * has been touched since its live version was published is the signal
+   * the card needs, and the editor does the precise comparison when the
+   * instructor actually opens it.
+   */
   return rows.map((row) => {
     const rollup = rollupBy.get(row.id);
     return {
@@ -89,6 +99,8 @@ async function decorateCards(
       // because "0% average" and "no learners yet" are different facts.
       averageProgress: (rollup?.enrolled ?? 0) === 0 ? null : (averageBy.get(row.id) ?? 0),
       lessonsNeedingVideo: videoBy.get(row.id) ?? 0,
+      hasUnpublishedChanges: versionBy.get(row.id)?.stale ?? false,
+      liveVersion: versionBy.get(row.id)?.version ?? null,
       createdAt: row.createdAt.toISOString(),
       publishedAt: row.publishedAt?.toISOString() ?? null,
     };
@@ -121,6 +133,7 @@ export const instructorService = {
             difficulty: true,
             status: true,
             createdAt: true,
+            updatedAt: true,
             publishedAt: true,
           },
         }),
