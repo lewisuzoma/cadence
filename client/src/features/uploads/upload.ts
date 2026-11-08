@@ -59,10 +59,25 @@ export function readVideoDuration(file: File): Promise<number | undefined> {
     const video = document.createElement('video');
     video.preload = 'metadata';
 
+    let settled = false;
     const finish = (value: number | undefined) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       URL.revokeObjectURL(url);
       resolve(value);
     };
+
+    /*
+     * A deadline, because this is a hint and must never be a hang.
+     *
+     * Nothing guarantees the browser fires either event — a codec it
+     * cannot parse, a file it decides not to load, or an environment with
+     * no media stack at all. Without this the upload would wait here
+     * forever before it had sent a single byte. Giving up simply means
+     * the server measures the duration itself, which it prefers anyway.
+     */
+    const timer = setTimeout(() => finish(undefined), 5000);
 
     video.addEventListener('loadedmetadata', () => {
       finish(Number.isFinite(video.duration) ? Math.round(video.duration) : undefined);
