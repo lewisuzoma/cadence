@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
   BarChart3,
@@ -261,7 +261,8 @@ function ActiveDonut({ stats, activeDays }: { stats: CourseAnalytics['stats']; a
 
 export function CourseAnalyticsPage() {
   const { id } = useParams<{ id: string }>();
-  const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
   const selected = id ?? params.get('course') ?? undefined;
 
   // The picker is only needed on the standalone /analytics route, where no
@@ -361,10 +362,10 @@ export function CourseAnalyticsPage() {
         <Select
           value={selected}
           onValueChange={(value) => {
-            const next = new URLSearchParams(params);
-            next.set('course', value);
-            setParams(next);
-            window.location.assign(`/instructor/courses/${value}/analytics`);
+            // Client navigation, not a reload: a full page load here would
+            // throw away the query cache and re-download the bundle to
+            // show a sibling route.
+            navigate(`/instructor/courses/${value}/analytics`);
           }}
         >
           <SelectTrigger className="w-full sm:w-96">
