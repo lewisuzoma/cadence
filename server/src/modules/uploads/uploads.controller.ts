@@ -1,5 +1,9 @@
 import type { Request, Response } from 'express';
-import { completeUploadSchema, presignUploadSchema } from '@cadence/shared';
+import {
+  completeUploadSchema,
+  partTargetsRequestSchema,
+  presignUploadSchema,
+} from '@cadence/shared';
 import { env } from '../../config/env.js';
 import { ForbiddenError, NotFoundError, UnprocessableError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
@@ -29,6 +33,56 @@ export const uploadsController = {
     noContent(res);
   },
 
+  /** What still needs sending — the question a resume begins with. */
+  async status(req: Request, res: Response): Promise<void> {
+    const status = await uploadsService.uploadStatus(req.params.id!, req.user!);
+    ok(res, 'Upload status retrieved', status);
+  },
+
+  /** Signed targets for a batch of parts. */
+  async partTargets(req: Request, res: Response): Promise<void> {
+    const { partNumbers } = partTargetsRequestSchema.parse(req.body);
+    const parts = await uploadsService.partTargets(req.params.id!, partNumbers, req.user!);
+    ok(res, 'Part targets issued', { parts });
+  },
+
+  /**
+   * Stages one part, for the local driver.
+   *
+   * The S3 path never reaches this: the browser PUTs each part straight
+   * to the bucket. Here the API is the storage endpoint, so it repeats
+   * the checks a presigned URL would have carried in its signature.
+   */
+  async putPart(req: Request, res: Response): Promise<void> {
+    const provider = storage();
+    if (!(provider instanceof LocalStorageDriver)) {
+      throw new NotFoundError('Upload endpoint');
+    }
+
+    const uploadId = req.params.uploadId!;
+    const partNumber = Number(req.params.partNumber);
+    if (!Number.isInteger(partNumber) || partNumber < 1) {
+      throw new UnprocessableError('Invalid part number.');
+    }
+
+    const asset = await prisma.mediaAsset.findFirst({ where: { uploadId } });
+    if (!asset || asset.ownerId !== req.user!.id) throw new NotFoundError('Upload');
+    if (asset.status !== 'PENDING') {
+      throw new UnprocessableError('This upload has already been completed.');
+    }
+
+    // One part can never exceed the declared part size, so a client
+    // cannot use this endpoint to write an arbitrarily large file.
+    const limit = (asset.partSizeBytes ?? maxBytesFor(asset.kind)) + 1024;
+    const body = await readBody(req, limit, 'That part is larger than the agreed part size.');
+
+    const etag = await provider.writePart(uploadId, partNumber, body);
+    // Echoed as an ETag header so the client reads a part the same way
+    // whichever driver served it.
+    res.setHeader('ETag', `"${etag}"`);
+    ok(res, 'Part received', { partNumber, etag, sizeBytes: body.length });
+  },
+
   /**
    * Receives bytes for the local driver.
    *
@@ -52,34 +106,16 @@ export const uploadsController = {
       throw new UnprocessableError('This upload has already been completed.');
     }
 
-    const chunks: Buffer[] = [];
-    let total = 0;
-    const limit = maxBytesFor(asset.kind);
+    const body = await readBody(
+      req,
+      maxBytesFor(asset.kind),
+      `That file is larger than the ${
+        asset.kind === 'VIDEO' ? env.MAX_VIDEO_MB : env.MAX_IMAGE_MB
+      } MB limit.`,
+    );
 
-    await new Promise<void>((resolve, reject) => {
-      req.on('data', (chunk: Buffer) => {
-        total += chunk.length;
-        if (total > limit) {
-          // Stop reading the moment the ceiling is passed, rather than
-          // buffering a whole oversized file and rejecting it afterwards.
-          reject(
-            new UnprocessableError(
-              `That file is larger than the ${
-                asset.kind === 'VIDEO' ? env.MAX_VIDEO_MB : env.MAX_IMAGE_MB
-              } MB limit.`,
-            ),
-          );
-          req.destroy();
-          return;
-        }
-        chunks.push(chunk);
-      });
-      req.on('end', resolve);
-      req.on('error', reject);
-    });
-
-    await provider.write(key, Buffer.concat(chunks));
-    ok(res, 'Bytes received', { storageKey: key, sizeBytes: total });
+    await provider.write(key, body);
+    ok(res, 'Bytes received', { storageKey: key, sizeBytes: body.length });
   },
 
   /**
@@ -162,6 +198,34 @@ export const uploadsController = {
     object.stream.pipe(res);
   },
 };
+
+/**
+ * Reads a request body into memory, refusing one over the limit.
+ *
+ * It stops reading the moment the ceiling is passed rather than
+ * buffering the whole oversized payload and rejecting it afterwards —
+ * which would be a trivial way to exhaust the process's memory.
+ */
+async function readBody(req: Request, limit: number, overLimitMessage: string): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+
+  await new Promise<void>((resolve, reject) => {
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > limit) {
+        reject(new UnprocessableError(overLimitMessage));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', resolve);
+    req.on('error', reject);
+  });
+
+  return Buffer.concat(chunks);
+}
 
 /**
  * Parses a `Range: bytes=start-end` header.

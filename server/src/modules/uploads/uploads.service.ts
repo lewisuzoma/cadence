@@ -23,6 +23,7 @@ import {
   verifyStoredType,
 } from '../../lib/storage/index.js';
 import type { AuthUser } from '../../middlewares/types.js';
+import type { PresignedPartTarget } from '@cadence/shared';
 
 /**
  * Uploads.
@@ -126,11 +127,67 @@ export const uploadsService = {
       throw new UnprocessableError('A course is required for this kind of upload.');
     }
 
+    /*
+     * Resume before starting afresh.
+     *
+     * If this person already has an unfinished multipart upload of a file
+     * with the same fingerprint, hand that one back instead of beginning
+     * a second. Otherwise a user who re-picks the file after a dropped
+     * connection would silently re-upload every byte they already sent,
+     * which is precisely what this feature exists to avoid.
+     */
+    if (input.fingerprint) {
+      const resumable = await prisma.mediaAsset.findFirst({
+        where: {
+          ownerId: actor.id,
+          fingerprint: input.fingerprint,
+          status: 'PENDING',
+          uploadId: { not: null },
+          sizeBytes: input.sizeBytes,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (resumable?.uploadId && resumable.partSizeBytes) {
+        const parts = await storage().listParts({
+          key: resumable.storageKey,
+          uploadId: resumable.uploadId,
+        });
+        return {
+          assetId: resumable.id,
+          method: 'PUT',
+          headers: {},
+          storageKey: resumable.storageKey,
+          expiresInSeconds: env.SIGNED_URL_TTL_SECONDS,
+          multipart: {
+            uploadId: resumable.uploadId,
+            partSizeBytes: resumable.partSizeBytes,
+            totalParts: Math.ceil(resumable.sizeBytes / resumable.partSizeBytes),
+            uploadedParts: parts.map((part) => part.partNumber).sort((a, b) => a - b),
+            resumed: true,
+          },
+        };
+      }
+    }
+
     const storageKey = buildStorageKey({
       purpose: input.purpose,
       ownerId: actor.id,
       mimeType: input.mimeType,
     });
+
+    // Small files go in one request: multipart's per-part round trip is
+    // pure overhead below the threshold.
+    const multipartThreshold = env.UPLOAD_MULTIPART_THRESHOLD_MB * 1024 * 1024;
+    const useMultipart = input.sizeBytes > multipartThreshold;
+    const partSizeBytes = env.UPLOAD_PART_SIZE_MB * 1024 * 1024;
+
+    const started = useMultipart
+      ? await storage().createMultipartUpload({
+          key: storageKey,
+          mimeType: input.mimeType,
+        })
+      : null;
 
     const asset = await prisma.mediaAsset.create({
       data: {
@@ -140,9 +197,28 @@ export const uploadsService = {
         mimeType: input.mimeType,
         sizeBytes: input.sizeBytes,
         ...(input.originalName ? { originalName: input.originalName } : {}),
+        ...(input.fingerprint ? { fingerprint: input.fingerprint } : {}),
+        ...(started ? { uploadId: started.uploadId, partSizeBytes } : {}),
         status: 'PENDING',
       },
     });
+
+    if (started) {
+      return {
+        assetId: asset.id,
+        method: 'PUT',
+        headers: {},
+        storageKey,
+        expiresInSeconds: env.SIGNED_URL_TTL_SECONDS,
+        multipart: {
+          uploadId: started.uploadId,
+          partSizeBytes,
+          totalParts: Math.ceil(input.sizeBytes / partSizeBytes),
+          uploadedParts: [],
+          resumed: false,
+        },
+      };
+    }
 
     const target = await storage().createUploadTarget({
       key: storageKey,
@@ -157,6 +233,83 @@ export const uploadsService = {
       headers: target.headers,
       storageKey,
       expiresInSeconds: target.expiresInSeconds,
+    };
+  },
+
+  /**
+   * Signed targets for a batch of parts.
+   *
+   * A batch rather than one call per part: a 2 GB file at an 8 MB part
+   * size is 256 parts, and 256 extra round trips to ask where to put each
+   * one would be most of the latency of the upload.
+   */
+  async partTargets(
+    assetId: string,
+    partNumbers: number[],
+    actor: AuthUser,
+  ): Promise<{ partNumber: number; target: PresignedPartTarget }[]> {
+    const asset = await this.loadOwned(assetId, actor);
+    if (!asset.uploadId) {
+      throw new UnprocessableError('This upload is not a multipart upload.');
+    }
+    if (asset.status !== 'PENDING') {
+      throw new UnprocessableError('This upload has already been completed.');
+    }
+
+    const totalParts = asset.partSizeBytes
+      ? Math.ceil(asset.sizeBytes / asset.partSizeBytes)
+      : 0;
+
+    return Promise.all(
+      partNumbers.map(async (partNumber) => {
+        // Part numbers are bounded by the declared size, so a client
+        // cannot use this endpoint to write arbitrarily many parts.
+        if (partNumber < 1 || partNumber > totalParts) {
+          throw new UnprocessableError(`Part ${partNumber} is outside this upload.`);
+        }
+        const target = await storage().createPartTarget({
+          key: asset.storageKey,
+          uploadId: asset.uploadId!,
+          partNumber,
+        });
+        return {
+          partNumber,
+          target: {
+            uploadUrl: target.uploadUrl,
+            method: target.method,
+            headers: target.headers,
+            expiresInSeconds: target.expiresInSeconds,
+          },
+        };
+      }),
+    );
+  },
+
+  /**
+   * Which parts have already landed.
+   *
+   * Answered from the provider, never from our own records: with S3 the
+   * browser PUTs straight to the bucket and the API never sees the parts,
+   * so the bucket is the only source that cannot be stale.
+   */
+  async uploadStatus(assetId: string, actor: AuthUser) {
+    const asset = await this.loadOwned(assetId, actor);
+
+    const parts =
+      asset.uploadId && asset.status === 'PENDING'
+        ? await storage().listParts({ key: asset.storageKey, uploadId: asset.uploadId })
+        : [];
+
+    return {
+      assetId: asset.id,
+      status: asset.status,
+      sizeBytes: asset.sizeBytes,
+      partSizeBytes: asset.partSizeBytes,
+      totalParts: asset.partSizeBytes
+        ? Math.ceil(asset.sizeBytes / asset.partSizeBytes)
+        : null,
+      uploadedParts: parts.map((part) => part.partNumber).sort((a, b) => a - b),
+      uploadedBytes: parts.reduce((sum, part) => sum + part.sizeBytes, 0),
     };
   },
 
@@ -179,6 +332,43 @@ export const uploadsService = {
       return toMediaAsset(asset);
     }
 
+    /*
+     * A multipart upload has to be assembled before there is an object to
+     * verify at all. Every part must be present: completing with a gap
+     * would produce a truncated file that passes the magic-byte check
+     * (the header is in part 1) and then fails to play.
+     */
+    if (asset.uploadId) {
+      const parts = await storage().listParts({
+        key: asset.storageKey,
+        uploadId: asset.uploadId,
+      });
+      const expected = asset.partSizeBytes
+        ? Math.ceil(asset.sizeBytes / asset.partSizeBytes)
+        : parts.length;
+
+      const have = new Set(parts.map((part) => part.partNumber));
+      const missing = Array.from({ length: expected }, (_, index) => index + 1).filter(
+        (partNumber) => !have.has(partNumber),
+      );
+      if (missing.length > 0) {
+        throw new UnprocessableError(
+          `This upload is incomplete: ${missing.length} of ${expected} parts are missing. Resume the upload and try again.`,
+        );
+      }
+
+      await storage().completeMultipartUpload({
+        key: asset.storageKey,
+        uploadId: asset.uploadId,
+        parts,
+      });
+      // The multipart upload is finished; the key now holds one object.
+      await prisma.mediaAsset.update({
+        where: { id: asset.id },
+        data: { uploadId: null },
+      });
+    }
+
     const stored = await storage().head(asset.storageKey);
     if (!stored) {
       await this.markFailed(asset.id);
@@ -190,14 +380,14 @@ export const uploadsService = {
     // The real size, which may differ from the one that was declared.
     const limit = maxBytesFor(asset.kind);
     if (stored.sizeBytes > limit) {
-      await this.discard(asset.id, asset.storageKey);
+      await this.discard(asset.id, asset.storageKey, asset.uploadId);
       const limitMb = asset.kind === 'VIDEO' ? env.MAX_VIDEO_MB : env.MAX_IMAGE_MB;
       throw new UnprocessableError(
         `The uploaded file is ${formatMb(stored.sizeBytes)} MB, over the ${limitMb} MB limit.`,
       );
     }
     if (stored.sizeBytes === 0) {
-      await this.discard(asset.id, asset.storageKey);
+      await this.discard(asset.id, asset.storageKey, asset.uploadId);
       throw new UnprocessableError('The uploaded file is empty.');
     }
 
@@ -208,7 +398,7 @@ export const uploadsService = {
       head: stored.headBytes,
     });
     if (!verdict.ok) {
-      await this.discard(asset.id, asset.storageKey);
+      await this.discard(asset.id, asset.storageKey, asset.uploadId);
       throw new UnprocessableError(verdict.reason);
     }
 
@@ -262,7 +452,7 @@ export const uploadsService = {
       );
     }
 
-    await this.discard(asset.id, asset.storageKey);
+    await this.discard(asset.id, asset.storageKey, asset.uploadId);
   },
 
   /** The asset, if it belongs to the caller. */
@@ -281,8 +471,24 @@ export const uploadsService = {
     await prisma.mediaAsset.update({ where: { id: assetId }, data: { status: 'FAILED' } });
   },
 
-  /** Marks the row FAILED and deletes the object. */
-  async discard(assetId: string, storageKey: string): Promise<void> {
+  /**
+   * Removes the row, the object, and any multipart upload still in
+   * flight.
+   *
+   * Aborting the multipart matters beyond tidiness: S3 charges for the
+   * storage of orphaned parts indefinitely, and they are invisible in a
+   * normal bucket listing, so an upload abandoned without an abort is a
+   * bill nobody can see.
+   */
+  async discard(assetId: string, storageKey: string, uploadId?: string | null): Promise<void> {
+    if (uploadId) {
+      await storage()
+        .abortMultipartUpload({ key: storageKey, uploadId })
+        .catch((error: unknown) => {
+          logger.warn({ err: error, storageKey }, 'Could not abort a multipart upload');
+        });
+    }
+
     await storage()
       .delete(storageKey)
       .catch((error: unknown) => {
@@ -326,11 +532,11 @@ export const uploadsService = {
     const cutoff = new Date(Date.now() - olderThanMinutes * 60 * 1000);
     const orphans = await prisma.mediaAsset.findMany({
       where: { status: { in: ['PENDING', 'FAILED'] }, createdAt: { lt: cutoff } },
-      select: { id: true, storageKey: true },
+      select: { id: true, storageKey: true, uploadId: true },
     });
 
     for (const orphan of orphans) {
-      await this.discard(orphan.id, orphan.storageKey);
+      await this.discard(orphan.id, orphan.storageKey, orphan.uploadId);
     }
     if (orphans.length > 0) {
       logger.info({ count: orphans.length }, 'Cleaned up abandoned uploads');

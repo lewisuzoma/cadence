@@ -19,5 +19,9 @@ PLAN.md
 docs/design-notes.md
 
 # Uploaded media under the local storage driver.
-storage/
+#
+# Anchored with a leading slash. Unanchored, `storage/` matches at ANY
+# depth — which silently excluded `server/src/lib/storage/`, the whole
+# storage module, from the repository.
+/storage/
 

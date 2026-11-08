@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Link2, Upload, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Link2, RotateCcw, Upload, X } from 'lucide-react';
 import { formatTimecode } from '@cadence/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,14 +40,30 @@ export type VideoValue = {
 
 type Phase =
   | { kind: 'empty' }
-  | { kind: 'uploading'; name: string; loaded: number; total: number; percentage: number }
+  | {
+      kind: 'uploading';
+      name: string;
+      loaded: number;
+      total: number;
+      percentage: number;
+      /** Set when the server picked up an upload already in progress. */
+      resumedFrom?: { parts: number; total: number };
+    }
   | { kind: 'processing'; name: string }
   | { kind: 'ready'; name: string; sizeBytes: number; durationSeconds: number | null }
-  | { kind: 'failed'; name: string; reason: string };
+  | { kind: 'failed'; name: string; reason: string; resumable: boolean };
 
 function megabytes(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(0);
 }
+
+/**
+ * Mirrors `UPLOAD_MULTIPART_THRESHOLD_MB` on the server.
+ *
+ * Only used to word the failure message — the server decides which path
+ * an upload actually takes, and the client follows what it is told.
+ */
+const MULTIPART_THRESHOLD_BYTES = 16 * 1024 * 1024;
 
 export function VideoUploader({
   courseId,
@@ -81,12 +97,19 @@ export function VideoUploader({
     // falls back to this, sanity-checked, when the binary is absent.
     const durationSeconds = await readVideoDuration(file);
 
+    // Held outside the progress handler so the "resumed" note survives
+    // every subsequent progress tick.
+    let resumedFrom: { parts: number; total: number } | undefined;
+
     const handle = uploadFile({
       file,
       kind: 'VIDEO',
       purpose: 'LESSON_VIDEO',
       courseId,
       ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+      onResumed: (parts, total) => {
+        resumedFrom = { parts, total };
+      },
       onProgress: (progress) =>
         setPhase({
           kind: 'uploading',
@@ -94,6 +117,7 @@ export function VideoUploader({
           loaded: progress.loadedBytes,
           total: progress.totalBytes,
           percentage: progress.percentage,
+          ...(resumedFrom ? { resumedFrom } : {}),
         }),
       onPhase: (next) => {
         if (next === 'processing') setPhase({ kind: 'processing', name: file.name });
@@ -122,9 +146,10 @@ export function VideoUploader({
         kind: 'failed',
         name: file.name,
         reason:
-          error instanceof Error
-            ? error.message
-            : 'The upload failed. Nothing was saved.',
+          error instanceof Error ? error.message : 'The upload failed.',
+        // Above the multipart threshold the parts already sent are still
+        // in storage, so a retry picks up where this left off.
+        resumable: file.size > MULTIPART_THRESHOLD_BYTES,
       });
     } finally {
       handleRef.current = null;
@@ -232,6 +257,13 @@ export function VideoUploader({
                 {megabytes(phase.loaded)} of {megabytes(phase.total)} MB ·{' '}
                 {phase.percentage}%
               </p>
+              {phase.resumedFrom ? (
+                <p className="flex items-center gap-1.5 text-caption text-success">
+                  <RotateCcw className="size-3.5" aria-hidden="true" />
+                  Resumed — {phase.resumedFrom.parts} of {phase.resumedFrom.total} parts
+                  were already uploaded.
+                </p>
+              ) : null}
               <Progress
                 value={phase.percentage}
                 label={`Uploading ${phase.name}`}
@@ -310,7 +342,9 @@ export function VideoUploader({
               </span>
               <p className="text-small font-semibold text-destructive">{phase.reason}</p>
               <p className="text-caption text-muted-foreground">
-                Nothing was saved; retrying continues from the start.
+                {phase.resumable
+                  ? 'The parts already uploaded were kept — retrying continues from where it stopped.'
+                  : 'Nothing was saved; retrying continues from the start.'}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button
